@@ -236,6 +236,7 @@ DualArmConfig loadConfigFromYaml(const std::string& path) {
         cfg.network.command_bind = getString(sec, "command_bind", cfg.network.command_bind);
         cfg.network.state_pub_bind = getString(sec, "state_pub_bind", cfg.network.state_pub_bind);
     }
+    cfg.network.command_timeout_sec = cfg.servo.command_timeout_sec;
 
     if (sections.count("logging")) {
         const Section& sec = sections.at("logging");

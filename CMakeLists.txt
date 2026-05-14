@@ -33,11 +33,18 @@ target_compile_definitions(rb_servo_core PRIVATE
     $<$<BOOL:${RB_SERVO_ENABLE_RBPODO}>:RB_SERVO_ENABLE_RBPODO=1>
 )
 
-find_package(Threads REQUIRED)
-target_link_libraries(rb_servo_core PUBLIC Threads::Threads)
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    )
+    FetchContent_MakeAvailable(json)
+endif()
 
-# Config and command parsing intentionally use small built-in parsers for this scaffold.
-# Replace with yaml-cpp + nlohmann/json if the project grows.
+find_package(Threads REQUIRED)
+target_link_libraries(rb_servo_core PUBLIC Threads::Threads nlohmann_json::nlohmann_json)
 
 add_executable(rb_servo_server src/main.cpp)
 target_link_libraries(rb_servo_server PRIVATE rb_servo_core)
