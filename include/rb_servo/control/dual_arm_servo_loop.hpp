@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -117,9 +118,10 @@ private:
     JointArray right_prevprev_sent_q_deg_{};
 
     std::atomic<ServerMotionState> motion_state_{ServerMotionState::Disconnected};
-    bool fault_latched_ = false;
-    SafetyVerdict fault_verdict_ = SafetyVerdict::Ok;
-    SafetyVerdict latched_fault_reason_ = SafetyVerdict::Ok;
+    mutable std::mutex state_mutex_;
+    std::atomic<bool> fault_latched_{false};
+    std::atomic<SafetyVerdict> fault_verdict_{SafetyVerdict::Ok};
+    std::atomic<SafetyVerdict> latched_fault_reason_{SafetyVerdict::Ok};
     std::string fault_reason_;
     JointArray left_fault_hold_q_deg_{};
     JointArray right_fault_hold_q_deg_{};

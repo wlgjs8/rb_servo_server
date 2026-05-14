@@ -17,6 +17,7 @@ No failure path may output [0, 0, 0, 0, 0, 0] unless that was a validated user c
 | missing `q_target_deg` for `JointTarget` | Drop packet; command buffer is unchanged |
 | malformed numeric payload or array length | Drop packet; command buffer is unchanged |
 | `timeout_sec <= 0` | Drop packet; command buffer is unchanged |
+| invalid timeout already inside command buffer | Hold; do not substitute a default motion timeout |
 | unsupported Cartesian command | Hold previous safe target |
 | future IK failure | Hold previous safe target or fault latch |
 | joint command outside limits | clamp to configured limits |

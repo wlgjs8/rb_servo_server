@@ -3,7 +3,7 @@
 ## Application
 
 - `src/main.cpp`  
-  Loads config, creates robot backends, starts logger, command server, and dual-arm servo loop.
+  Loads config, creates robot backends, starts the logger and servo loop, then opens the command server only after the loop reaches its initial safe hold.
 
 ## Core
 
@@ -41,7 +41,7 @@
 ## Control
 
 - `include/rb_servo/control/command_buffer.hpp` / `src/control/command_buffer.cpp`  
-  Latest-command-wins buffer with stale-command fallback to Hold.
+  Latest-command-wins buffer with stale-command fallback to Hold. Invalid stored timeout values also resolve to Hold instead of a hard-coded recovery timeout.
 
 - `include/rb_servo/control/trajectory_filter.hpp` / `src/control/trajectory_filter.cpp`  
   Joint target/velocity handling and velocity clamp. Hold returns previous sent target.
@@ -77,7 +77,7 @@
 ## Logging
 
 - `include/rb_servo/logging/servo_logger.hpp` / `src/logging/servo_logger.cpp`  
-  Async CSV logger with period/jitter columns.
+  Bounded async CSV logger with period/jitter columns, queue drop count, and CSV escaping for string fields.
 
 ## Tools
 

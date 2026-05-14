@@ -247,26 +247,29 @@ bool CommandServer::start() {
 void CommandServer::stop() {
     if (!running_) return;
     running_ = false;
-    if (socket_fd_ >= 0) {
-        ::shutdown(socket_fd_, SHUT_RDWR);
-        ::close(socket_fd_);
-        socket_fd_ = -1;
-    }
     if (thread_.joinable()) {
         thread_.join();
     }
 }
 
 void CommandServer::threadMain() {
+    int socket_fd = -1;
+    auto close_socket = [&]() {
+        if (socket_fd >= 0) {
+            ::close(socket_fd);
+            socket_fd = -1;
+        }
+    };
+
     try {
         const UdpEndpoint ep = parseUdpUri(config_.command_bind);
-        socket_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
-        if (socket_fd_ < 0) {
+        socket_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+        if (socket_fd < 0) {
             throw std::runtime_error(std::string("socket() failed: ") + std::strerror(errno));
         }
 
         int reuse = 1;
-        ::setsockopt(socket_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -274,7 +277,7 @@ void CommandServer::threadMain() {
         if (::inet_pton(AF_INET, ep.host.c_str(), &addr.sin_addr) != 1) {
             throw std::runtime_error("Invalid bind host: " + ep.host);
         }
-        if (::bind(socket_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        if (::bind(socket_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
             throw std::runtime_error(std::string("bind() failed: ") + std::strerror(errno));
         }
 
@@ -283,16 +286,16 @@ void CommandServer::threadMain() {
         while (running_) {
             fd_set fds;
             FD_ZERO(&fds);
-            FD_SET(socket_fd_, &fds);
+            FD_SET(socket_fd, &fds);
             timeval tv{};
             tv.tv_sec = 0;
             tv.tv_usec = 100000;
-            const int ready = ::select(socket_fd_ + 1, &fds, nullptr, nullptr, &tv);
+            const int ready = ::select(socket_fd + 1, &fds, nullptr, nullptr, &tv);
             if (ready <= 0) continue;
 
             sockaddr_in src{};
             socklen_t src_len = sizeof(src);
-            const ssize_t n = ::recvfrom(socket_fd_, buffer.data(), buffer.size() - 1, 0,
+            const ssize_t n = ::recvfrom(socket_fd, buffer.data(), buffer.size() - 1, 0,
                                          reinterpret_cast<sockaddr*>(&src), &src_len);
             if (n <= 0) continue;
             if (static_cast<size_t>(n) >= buffer.size() - 1) {
@@ -318,6 +321,7 @@ void CommandServer::threadMain() {
         std::cerr << "[ERROR] CommandServer failed: " << e.what() << "\n";
         running_ = false;
     }
+    close_socket();
 }
 
 bool CommandServer::parseMessage(
@@ -350,7 +354,8 @@ bool CommandServer::parseMessage(
         return false;
     }
 
-    double timeout_sec = config_.command_timeout_sec > 0.0 ? config_.command_timeout_sec : 0.2;
+    double timeout_sec = config_.command_timeout_sec;
+    if (timeout_sec <= 0.0 || !std::isfinite(timeout_sec)) return false;
     if (!readOptionalNumber(root, "timeout_sec", &timeout_sec)) return false;
     if (timeout_sec <= 0.0 || !std::isfinite(timeout_sec)) return false;
 

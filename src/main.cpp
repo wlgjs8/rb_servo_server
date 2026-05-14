@@ -58,9 +58,15 @@ int main(int argc, char** argv) {
         if (!logger.start()) {
             return 1;
         }
-        command_server.start();
         if (!servo_loop.start()) {
             std::cerr << "[ERROR] failed to start servo loop\n";
+            logger.stop();
+            return 1;
+        }
+        if (!command_server.start()) {
+            std::cerr << "[ERROR] failed to start command server\n";
+            servo_loop.stop();
+            logger.stop();
             return 1;
         }
 
@@ -69,8 +75,8 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        servo_loop.stop();
         command_server.stop();
+        servo_loop.stop();
         logger.stop();
         std::cout << "rb_servo_server stopped\n";
     } catch (const std::exception& e) {

@@ -36,7 +36,6 @@ private:
 
     std::atomic<bool> running_{false};
     std::thread thread_;
-    int socket_fd_ = -1;
 };
 
 }  // namespace rb_servo

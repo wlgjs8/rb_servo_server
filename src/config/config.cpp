@@ -290,7 +290,6 @@ DualArmConfig loadConfigFromYaml(const std::string& path) {
         if (has(sec, "stop_both_arms_on_single_arm_error")) cfg.safety.stop_both_arms_on_single_arm_error = parseBool(sec.at("stop_both_arms_on_single_arm_error"));
         if (has(sec, "tracking_error_policy")) cfg.safety.tracking_error_policy = trackingErrorPolicyFromString(stripQuotes(sec.at("tracking_error_policy")));
         if (has(sec, "latch_fault_on_robot_state_error")) cfg.safety.latch_fault_on_robot_state_error = parseBool(sec.at("latch_fault_on_robot_state_error"));
-        if (has(sec, "latch_fault_on_emergency_stop")) cfg.safety.latch_fault_on_emergency_stop = parseBool(sec.at("latch_fault_on_emergency_stop"));
     }
 
     if (sections.count("network")) {
@@ -305,6 +304,13 @@ DualArmConfig loadConfigFromYaml(const std::string& path) {
         if (has(sec, "enable")) cfg.logging.enable = parseBool(sec.at("enable"));
         cfg.logging.directory = getString(sec, "directory", cfg.logging.directory);
         if (has(sec, "flush_period_ms")) cfg.logging.flush_period_ms = parseInt(sec.at("flush_period_ms"));
+        if (has(sec, "queue_capacity")) {
+            const int capacity = parseInt(sec.at("queue_capacity"));
+            if (capacity <= 0) {
+                throw std::runtime_error("logging.queue_capacity must be positive");
+            }
+            cfg.logging.queue_capacity = static_cast<size_t>(capacity);
+        }
     }
 
     if (sections.count("force_control")) {

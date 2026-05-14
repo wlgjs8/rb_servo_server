@@ -44,7 +44,6 @@ struct SafetyConfig {
 
     bool stop_both_arms_on_single_arm_error = true;
     bool latch_fault_on_robot_state_error = true;
-    bool latch_fault_on_emergency_stop = true;
 };
 
 struct ServoConfig {
@@ -72,6 +71,7 @@ struct LoggingConfig {
     bool enable = true;
     std::string directory = "./logs";
     int flush_period_ms = 100;
+    size_t queue_capacity = 4096;
 };
 
 struct ForceControlConfig {

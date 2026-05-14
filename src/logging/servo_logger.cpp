@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <string>
 
 namespace rb_servo {
 
@@ -48,9 +49,17 @@ void ServoLogger::push(const ServoSample& sample) {
     if (!config_.enable || !running_) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        queue_.push(sample);
+        if (queue_.size() >= config_.queue_capacity) {
+            queue_.pop_front();
+            dropped_samples_.fetch_add(1, std::memory_order_relaxed);
+        }
+        queue_.push_back(sample);
     }
     cv_.notify_one();
+}
+
+uint64_t ServoLogger::droppedSamples() const {
+    return dropped_samples_.load(std::memory_order_relaxed);
 }
 
 void ServoLogger::threadMain() {
@@ -61,7 +70,7 @@ void ServoLogger::threadMain() {
         });
         while (!queue_.empty()) {
             ServoSample sample = queue_.front();
-            queue_.pop();
+            queue_.pop_front();
             lock.unlock();
             writeSample(sample);
             lock.lock();
@@ -71,13 +80,34 @@ void ServoLogger::threadMain() {
 }
 
 void ServoLogger::writeHeader() {
-    file_ << "tick,loop_start_time_ns,loop_end_time_ns,period_ms,jitter_ms,filter_dt_ms,safety_verdict,fault_latched,fault_reason,command_seq,left_mode,right_mode,left_send_ok,right_send_ok";
+    file_ << "tick,loop_start_time_ns,loop_end_time_ns,period_ms,jitter_ms,filter_dt_ms,safety_verdict,fault_latched,fault_reason,logger_dropped_samples,command_seq,left_mode,right_mode,left_send_ok,right_send_ok";
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",right_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_sent_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",right_q_sent_" << i;
     file_ << ",left_error_code,right_error_code\n";
 }
+
+namespace {
+std::string csvEscape(const std::string& value) {
+    bool quote = false;
+    for (char c : value) {
+        if (c == '"' || c == ',' || c == '\n' || c == '\r') {
+            quote = true;
+            break;
+        }
+    }
+    if (!quote) return value;
+
+    std::string out = "\"";
+    for (char c : value) {
+        if (c == '"') out += '"';
+        out += c;
+    }
+    out += '"';
+    return out;
+}
+}  // namespace
 
 void ServoLogger::writeSample(const ServoSample& sample) {
     file_ << sample.tick << ','
@@ -88,7 +118,8 @@ void ServoLogger::writeSample(const ServoSample& sample) {
           << sample.filter_dt_ms << ','
           << toString(sample.safety_verdict) << ','
           << sample.fault_latched << ','
-          << sample.fault_reason << ','
+          << csvEscape(sample.fault_reason) << ','
+          << droppedSamples() << ','
           << sample.command.seq << ','
           << toString(sample.command.left.mode) << ','
           << toString(sample.command.right.mode) << ','

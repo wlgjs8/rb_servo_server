@@ -2,9 +2,9 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <fstream>
 #include <mutex>
-#include <queue>
 #include <thread>
 
 #include "rb_servo/config/config.hpp"
@@ -21,6 +21,7 @@ public:
     void stop();
 
     void push(const ServoSample& sample);
+    uint64_t droppedSamples() const;
 
 private:
     void threadMain();
@@ -35,7 +36,8 @@ private:
 
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::queue<ServoSample> queue_;
+    std::deque<ServoSample> queue_;
+    std::atomic<uint64_t> dropped_samples_{0};
 
     std::ofstream file_;
 };
