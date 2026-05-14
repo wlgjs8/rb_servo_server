@@ -5,7 +5,9 @@ logs/
 
 .omx/logs/
 .omx/state/
+.omx/team/
 .omx/reports/
 .omx/metrics.json
+.omx/tmux-hook.json
 
 .claude/settings.local.json

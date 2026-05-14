@@ -17,7 +17,7 @@ Default mock target:
 4. read left/right robot state
 5. read latest command from CommandBuffer
 6. stale command → Hold
-7. ResetFault command → clear latched fault and Hold
+7. ResetFault command → clear latched fault if present, return to ConnectedHold, and Hold
 8. EmergencyStop command → latch fault hold pose
 9. validate payloads; missing payload → Hold/InvalidCommand
 10. Cartesian modes currently → Hold/CartesianUnavailable
@@ -41,6 +41,7 @@ The logger records:
 - `filter_dt_ms`: capped dt used by trajectory/safety math
 - `loop_start_time_ns`
 - `loop_end_time_ns`
+- `logger_dropped_samples`: total samples dropped by the bounded logging queue
 
 These are used to decide whether 100–200 Hz is stable enough before trying rbsim/real hardware.
 
@@ -57,7 +58,7 @@ On a latched fault, the server holds a dedicated `fault_hold_q` captured from cu
 
 ## Command timeout
 
-The C++ receive timestamp is authoritative. If the latest command becomes stale, both arms hold by default.
+The C++ receive timestamp is authoritative. If the latest command becomes stale, both arms hold by default. If an invalid timeout somehow reaches `CommandBuffer`, the command is converted to Hold; the safety path does not silently substitute a hard-coded timeout.
 
 ## Safety behavior
 

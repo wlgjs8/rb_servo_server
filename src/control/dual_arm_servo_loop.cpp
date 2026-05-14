@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <mutex>
 
 #include "rb_servo/core/clock.hpp"
 #include "rb_servo/core/realtime.hpp"
@@ -98,14 +99,15 @@ ServerMotionState DualArmServoLoop::motionState() const {
 }
 
 bool DualArmServoLoop::faultLatched() const {
-    return fault_latched_;
+    return fault_latched_.load();
 }
 
 SafetyVerdict DualArmServoLoop::latchedFaultReason() const {
-    return latched_fault_reason_;
+    return latched_fault_reason_.load();
 }
 
 ServoTarget DualArmServoLoop::previousSentTarget() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     ServoTarget target;
     target.left_q_target_deg = left_prev_sent_q_deg_;
     target.right_q_target_deg = right_prev_sent_q_deg_;
@@ -171,15 +173,17 @@ void DualArmServoLoop::loopMain() {
             latchFault(SafetyVerdict::EmergencyStop, "EmergencyStop command", left_state, right_state);
             command = makeHoldCommand(left_state, right_state, loop_start);
         } else if (commandRequestsResetFault(command)) {
-            if (fault_latched_) {
+            if (fault_latched_.load()) {
                 clearFaultLatch(left_state, right_state);
+            } else {
+                setMotionState(ServerMotionState::ConnectedHold);
             }
             command = makeHoldCommand(left_state, right_state, loop_start);
         } else if (commandRequestsDisarmMotion(command)) {
             setMotionState(ServerMotionState::ConnectedHold);
             command = makeHoldCommand(left_state, right_state, loop_start);
         } else if (commandRequestsArmMotion(command)) {
-            if (!fault_latched_) {
+            if (!fault_latched_.load()) {
                 setMotionState(ServerMotionState::ArmedHold);
             }
             command = makeHoldCommand(left_state, right_state, loop_start);
@@ -190,7 +194,7 @@ void DualArmServoLoop::loopMain() {
         ServoTarget safe_target;
         SafetyVerdict safety_verdict = SafetyVerdict::Ok;
 
-        if (fault_latched_) {
+        if (fault_latched_.load()) {
             safe_target = currentFaultHoldTarget();
             safety_verdict = SafetyVerdict::FaultLatched;
         } else {
@@ -243,8 +247,11 @@ void DualArmServoLoop::loopMain() {
             ? actual_period_ns - nominal_period_ns
             : nominal_period_ns - actual_period_ns);
         sample.safety_verdict = safety_verdict;
-        sample.fault_latched = fault_latched_;
-        sample.fault_reason = fault_reason_;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            sample.fault_latched = fault_latched_.load();
+            sample.fault_reason = fault_reason_;
+        }
         sample.motion_state = motion_state_.load();
 
         if (logger_) {
@@ -252,10 +259,12 @@ void DualArmServoLoop::loopMain() {
         }
 
         if (left_ok) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
             left_prevprev_sent_q_deg_ = left_prev_sent_q_deg_;
             left_prev_sent_q_deg_ = attempted_target.left_q_target_deg;
         }
         if (right_ok) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
             right_prevprev_sent_q_deg_ = right_prev_sent_q_deg_;
             right_prev_sent_q_deg_ = attempted_target.right_q_target_deg;
         }
@@ -440,9 +449,10 @@ bool DualArmServoLoop::isRealMode() const {
 void DualArmServoLoop::clearFaultLatch(const RobotState& left_state, const RobotState& right_state) {
     if (left_robot_) left_robot_->resetFault();
     if (right_robot_) right_robot_->resetFault();
-    fault_latched_ = false;
-    fault_verdict_ = SafetyVerdict::Ok;
-    latched_fault_reason_ = SafetyVerdict::Ok;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    fault_latched_.store(false);
+    fault_verdict_.store(SafetyVerdict::Ok);
+    latched_fault_reason_.store(SafetyVerdict::Ok);
     fault_reason_.clear();
     left_prev_sent_q_deg_ = chooseSafeHoldTarget(left_state, left_prev_sent_q_deg_);
     right_prev_sent_q_deg_ = chooseSafeHoldTarget(right_state, right_prev_sent_q_deg_);
@@ -460,10 +470,11 @@ void DualArmServoLoop::latchFault(
     const RobotState& left_state,
     const RobotState& right_state
 ) {
-    if (fault_latched_) return;
-    fault_latched_ = true;
-    fault_verdict_ = verdict;
-    latched_fault_reason_ = verdict;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (fault_latched_.load()) return;
+    fault_latched_.store(true);
+    fault_verdict_.store(verdict);
+    latched_fault_reason_.store(verdict);
     fault_reason_ = reason;
     left_fault_hold_q_deg_ = chooseSafeHoldTarget(left_state, left_prev_sent_q_deg_);
     right_fault_hold_q_deg_ = chooseSafeHoldTarget(right_state, right_prev_sent_q_deg_);
@@ -478,6 +489,7 @@ void DualArmServoLoop::setMotionState(ServerMotionState state) {
 }
 
 ServoTarget DualArmServoLoop::currentFaultHoldTarget() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     ServoTarget target;
     target.left_q_target_deg = left_fault_hold_q_deg_;
     target.right_q_target_deg = right_fault_hold_q_deg_;

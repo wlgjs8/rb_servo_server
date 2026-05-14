@@ -1,6 +1,6 @@
-#include <cassert>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -15,6 +15,14 @@
 namespace {
 
 constexpr double kEpsilon = 1e-9;
+
+#define RB_CHECK(expr) \
+    do { \
+        if (!(expr)) { \
+            std::cerr << "CHECK failed: " #expr << " at " << __FILE__ << ":" << __LINE__ << "\n"; \
+            return false; \
+        } \
+    } while (0)
 
 rb_servo::JointArray joints(double value) {
     rb_servo::JointArray out{};
@@ -116,7 +124,7 @@ void sleepTicks() {
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
 }
 
-void testCommandValidation() {
+bool testCommandValidation() {
     rb_servo::NetworkConfig network;
     network.command_timeout_sec = 0.35;
     rb_servo::CommandBuffer buffer;
@@ -124,25 +132,55 @@ void testCommandValidation() {
     rb_servo::DualArmCommand out;
     const uint64_t now = rb_servo::nowSteadyNs();
 
-    assert(!server.parseMessage("{", now, &out));
-    assert(!server.parseMessage(R"({"mode":"Unknown"})", now, &out));
-    assert(!server.parseMessage(R"({"mode":"JointTarget"})", now, &out));
-    assert(!server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[0,0,0,0,0]})", now, &out));
-    assert(!server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[0,0,0,0,0,"bad"]})", now, &out));
-    assert(!server.parseMessage(R"({"mode":"JointTarget","timeout_sec":0,"q_target_deg":[0,0,0,0,0,0]})", now, &out));
+    RB_CHECK(!server.parseMessage("{", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"Unknown"})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"JointTarget"})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[0,0,0,0,0]})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[0,0,0,0,0,"bad"]})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"JointTarget","timeout_sec":0,"q_target_deg":[0,0,0,0,0,0]})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"JointVelocity"})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"TcpPoseTarget"})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"TcpDeltaStand"})", now, &out));
+    RB_CHECK(!server.parseMessage(R"({"mode":"TcpDeltaLocal"})", now, &out));
 
-    assert(server.parseMessage(R"({"mode":"EmergencyStop"})", now, &out));
-    assert(out.left.mode == rb_servo::ControlMode::EmergencyStop);
-    assert(server.parseMessage(R"({"mode":"ArmMotion"})", now, &out));
-    assert(out.left.mode == rb_servo::ControlMode::ArmMotion);
+    RB_CHECK(server.parseMessage(R"({"mode":"EmergencyStop"})", now, &out));
+    RB_CHECK(out.left.mode == rb_servo::ControlMode::EmergencyStop);
+    RB_CHECK(server.parseMessage(R"({"mode":"ArmMotion"})", now, &out));
+    RB_CHECK(out.left.mode == rb_servo::ControlMode::ArmMotion);
 
-    assert(server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[1,2,3,4,5,6]})", now, &out));
-    assert(out.left.has_joint_target);
-    assert(out.right.has_joint_target);
-    assert(std::abs(out.left.timeout_sec - 0.35) < kEpsilon);
+    RB_CHECK(server.parseMessage(R"({"mode":"JointTarget","q_target_deg":[1,2,3,4,5,6]})", now, &out));
+    RB_CHECK(out.left.has_joint_target);
+    RB_CHECK(out.right.has_joint_target);
+    RB_CHECK(std::abs(out.left.timeout_sec - 0.35) < kEpsilon);
+    return true;
 }
 
-void testEmergencyWinsAndResetDoesNotRun() {
+bool testCommandBufferInvalidTimeoutHolds() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.host_time_ns = rb_servo::nowSteadyNs();
+    target.left.q_target_deg = joints(12.0);
+    target.right.q_target_deg = joints(12.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+    target.left.timeout_sec = -1.0;
+    target.right.timeout_sec = 0.2;
+    buffer.setCommand(target);
+
+    rb_servo::DualArmCommand latest = buffer.latestOrHold(target.host_time_ns + 1);
+    RB_CHECK(latest.left.mode == rb_servo::ControlMode::Hold);
+    RB_CHECK(latest.right.mode == rb_servo::ControlMode::Hold);
+
+    target.left.timeout_sec = 0.1;
+    target.right.timeout_sec = 0.1;
+    buffer.setCommand(target);
+    latest = buffer.latestOrHold(target.host_time_ns + 200'000'000ULL);
+    RB_CHECK(latest.left.mode == rb_servo::ControlMode::Hold);
+    RB_CHECK(latest.right.mode == rb_servo::ControlMode::Hold);
+    return true;
+}
+
+bool testEmergencyWinsAndResetDoesNotRun() {
     rb_servo::CommandBuffer buffer;
     rb_servo::DualArmConfig cfg = testConfig();
     const rb_servo::JointArray initial = joints(0.0);
@@ -154,22 +192,22 @@ void testEmergencyWinsAndResetDoesNotRun() {
         nullptr
     );
 
-    assert(loop.start());
+    RB_CHECK(loop.start());
     sleepTicks();
-    assert(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
 
     rb_servo::DualArmCommand mixed = command(rb_servo::ControlMode::ResetFault);
     mixed.right.mode = rb_servo::ControlMode::EmergencyStop;
     buffer.setCommand(mixed);
     sleepTicks();
-    assert(loop.motionState() == rb_servo::ServerMotionState::EmergencyLatched);
-    assert(loop.faultLatched());
-    assert(loop.latchedFaultReason() == rb_servo::SafetyVerdict::EmergencyStop);
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::EmergencyLatched);
+    RB_CHECK(loop.faultLatched());
+    RB_CHECK(loop.latchedFaultReason() == rb_servo::SafetyVerdict::EmergencyStop);
 
     buffer.setCommand(command(rb_servo::ControlMode::ResetFault));
     sleepTicks();
-    assert(!loop.faultLatched());
-    assert(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
+    RB_CHECK(!loop.faultLatched());
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
 
     rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
     target.left.q_target_deg = joints(5.0);
@@ -178,17 +216,90 @@ void testEmergencyWinsAndResetDoesNotRun() {
     target.right.has_joint_target = true;
     buffer.setCommand(target);
     sleepTicks();
-    assert(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
 
     buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
     sleepTicks();
     buffer.setCommand(target);
     sleepTicks();
-    assert(loop.motionState() == rb_servo::ServerMotionState::Running);
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::Running);
+
+    buffer.setCommand(command(rb_servo::ControlMode::ResetFault));
+    sleepTicks();
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
     loop.stop();
+    return true;
 }
 
-void testSendFailureDoesNotAdvancePreviousTarget() {
+bool testDisarmAndCartesianHoldPreviousTarget() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    const rb_servo::JointArray initial = joints(0.0);
+    rb_servo::DualArmServoLoop loop(
+        std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false),
+        std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
+    sleepTicks();
+
+    rb_servo::DualArmCommand cartesian = command(rb_servo::ControlMode::TcpPoseTarget);
+    cartesian.left.has_tcp_target = true;
+    cartesian.right.has_tcp_target = true;
+    cartesian.left.tcp_target_stand.x = 0.1;
+    cartesian.right.tcp_target_stand.x = 0.1;
+    buffer.setCommand(cartesian);
+    sleepTicks();
+    RB_CHECK(sameJointArray(loop.previousSentTarget().left_q_target_deg, initial));
+    RB_CHECK(sameJointArray(loop.previousSentTarget().right_q_target_deg, initial));
+
+    buffer.setCommand(command(rb_servo::ControlMode::DisarmMotion));
+    sleepTicks();
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::ConnectedHold);
+    loop.stop();
+    return true;
+}
+
+bool testJointLimitClamp() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    cfg.safety.q_max_deg = joints(5.0);
+    cfg.safety.q_min_deg = joints(-5.0);
+    cfg.safety.dq_max_deg_s = joints(100000.0);
+    cfg.safety.ddq_max_deg_s2 = joints(1000000.0);
+    const rb_servo::JointArray initial = joints(0.0);
+    rb_servo::DualArmServoLoop loop(
+        std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false),
+        std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
+    sleepTicks();
+
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.left.q_target_deg = joints(100.0);
+    target.right.q_target_deg = joints(100.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+    buffer.setCommand(target);
+    sleepTicks();
+    loop.stop();
+
+    const rb_servo::ServoTarget previous = loop.previousSentTarget();
+    for (double q : previous.left_q_target_deg) RB_CHECK(q <= 5.0 + kEpsilon);
+    for (double q : previous.right_q_target_deg) RB_CHECK(q <= 5.0 + kEpsilon);
+    return true;
+}
+
+bool testSendFailureDoesNotAdvancePreviousTarget() {
     rb_servo::CommandBuffer buffer;
     rb_servo::DualArmConfig cfg = testConfig();
     const rb_servo::JointArray initial = joints(0.0);
@@ -200,7 +311,7 @@ void testSendFailureDoesNotAdvancePreviousTarget() {
         nullptr
     );
 
-    assert(loop.start());
+    RB_CHECK(loop.start());
     buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
     sleepTicks();
 
@@ -214,15 +325,52 @@ void testSendFailureDoesNotAdvancePreviousTarget() {
     loop.stop();
 
     const rb_servo::ServoTarget previous = loop.previousSentTarget();
-    assert(sameJointArray(previous.left_q_target_deg, initial));
-    assert(!sameJointArray(previous.right_q_target_deg, initial));
+    RB_CHECK(sameJointArray(previous.left_q_target_deg, initial));
+    RB_CHECK(!sameJointArray(previous.right_q_target_deg, initial));
+    return true;
+}
+
+bool testStopBothOnSendFailureLatchesFault() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    cfg.safety.stop_both_arms_on_single_arm_error = true;
+    const rb_servo::JointArray initial = joints(0.0);
+    rb_servo::DualArmServoLoop loop(
+        std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, true),
+        std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
+    sleepTicks();
+
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.left.q_target_deg = joints(7.0);
+    target.right.q_target_deg = joints(7.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+    buffer.setCommand(target);
+    sleepTicks();
+
+    RB_CHECK(loop.faultLatched());
+    RB_CHECK(loop.latchedFaultReason() == rb_servo::SafetyVerdict::SendFailure);
+    RB_CHECK(loop.motionState() == rb_servo::ServerMotionState::FaultLatched);
+    loop.stop();
+    return true;
 }
 
 }  // namespace
 
 int main() {
-    testCommandValidation();
-    testEmergencyWinsAndResetDoesNotRun();
-    testSendFailureDoesNotAdvancePreviousTarget();
+    if (!testCommandValidation()) return 1;
+    if (!testCommandBufferInvalidTimeoutHolds()) return 1;
+    if (!testEmergencyWinsAndResetDoesNotRun()) return 1;
+    if (!testDisarmAndCartesianHoldPreviousTarget()) return 1;
+    if (!testJointLimitClamp()) return 1;
+    if (!testSendFailureDoesNotAdvancePreviousTarget()) return 1;
+    if (!testStopBothOnSendFailureLatchesFault()) return 1;
     return 0;
 }
