@@ -48,3 +48,10 @@ target_link_libraries(rb_servo_core PUBLIC Threads::Threads nlohmann_json::nlohm
 
 add_executable(rb_servo_server src/main.cpp)
 target_link_libraries(rb_servo_server PRIVATE rb_servo_core)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_safety_policy tests/test_safety_policy.cpp)
+    target_link_libraries(test_safety_policy PRIVATE rb_servo_core)
+    add_test(NAME safety_policy COMMAND test_safety_policy)
+endif()

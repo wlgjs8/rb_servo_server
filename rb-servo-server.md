@@ -77,7 +77,10 @@ Already implemented:
 - Hold as previous sent target
 - tracking-error safety guard with configurable snap/fault-latch policy
 - latched EmergencyStop / fault state
-- invalid command payload guard; missing arrays become Hold, not zero targets
+- invalid command payload guard; malformed packets are dropped before the command buffer changes
+- explicit `ArmMotion` gate before motion commands can run
+- send failure policy that records only successfully sent targets
+- real-mode startup guards for `RB_ALLOW_REAL_ROBOT`, realtime setup, local command bind, and conservative safety policy
 - capped filter dt and acceleration-overshoot guard
 - force-control types/config/interface scaffold
 
@@ -101,14 +104,18 @@ No failure path may output [0, 0, 0, 0, 0, 0] unless that was a validated comman
 
 Required behavior:
 
-- `JointTarget` without `q_target_deg` → Hold.
-- `JointVelocity` without `dq_target_deg_s` → Hold.
-- malformed 6D arrays → Hold.
+- malformed JSON / unknown mode / invalid numeric payload → Drop packet.
+- `JointTarget` without `q_target_deg` → Drop packet.
+- `JointVelocity` without `dq_target_deg_s` → Drop packet.
+- malformed 6D arrays → Drop packet.
 - stale command → Hold.
 - Cartesian command while IK is not implemented → Hold + `CartesianUnavailable`.
 - future IK failure → explicit failure result, then Hold or fault latch.
 - `EmergencyStop` → latch current actual pose if available, otherwise last safe target.
+- `ResetFault` → clear fault only and return to `ConnectedHold`; it does not resume motion.
+- motion commands are ignored until `ArmMotion` transitions to `ArmedHold`.
 - latched fault ignores motion commands until `ResetFault`.
+- failed `sendServoJ` targets are not recorded as previous sent targets.
 - mock/rbsim default tracking error policy: `snap_to_actual`.
 - real default tracking error policy: `fault_latch`.
 - trajectory/safety math uses capped `filter_dt`, while logs keep actual `period_ms`.
@@ -146,6 +153,7 @@ Expected:
 - `period_ms` is around 5 ms for 200 Hz
 - `jitter_ms` is nonzero and meaningful
 - after command timeout, mode falls back to `Hold`
+- after `ResetFault`, motion requires a fresh `ArmMotion`
 
 ### Files involved
 
