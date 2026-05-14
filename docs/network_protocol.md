@@ -6,8 +6,10 @@ Default:
 
 ```yaml
 network:
-  command_bind: "udp://0.0.0.0:50010"
+  command_bind: "udp://127.0.0.1:50010"
 ```
+
+In real mode, `udp://0.0.0.0:50010` is rejected unless `RB_ALLOW_NETWORK_EXPOSURE=1` is set.
 
 ## Important timing rule
 
@@ -28,6 +30,12 @@ Python may send `host_time_ns` for debugging, but `CommandServer` overwrites the
 ```
 
 ## Joint target command
+
+The server must first be armed:
+
+```json
+{"seq": 1, "mode": "ArmMotion"}
+```
 
 ```json
 {
@@ -124,6 +132,7 @@ A latched fault can be cleared with:
 ```
 
 After reset, the server re-baselines previous targets to current actual q when available.
+It stays in `ConnectedHold`; send `ArmMotion` again before motion targets.
 
 ## Missing payload safety
 
@@ -135,4 +144,4 @@ Motion modes require their payloads:
 - `TcpDeltaStand` requires `tcp_delta_stand` with 6 values.
 - `TcpDeltaLocal` requires `tcp_delta_local` with 6 values.
 
-If the required payload is absent or malformed, the command is converted to Hold.
+If the required payload is absent or malformed, the packet is dropped and the command buffer remains unchanged.

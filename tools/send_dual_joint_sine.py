@@ -23,6 +23,17 @@ def main() -> None:
     base = [0.0, -30.0, 80.0, 0.0, 60.0, 0.0]
     seq = 0
     dt = 1.0 / args.rate
+    arm_msg = {
+        "seq": seq,
+        "mode": "ArmMotion",
+        "host_time_ns": time.monotonic_ns(),
+        "timeout_sec": 0.2,
+        "coupled_timeout": True,
+        "left": {},
+        "right": {},
+    }
+    sock.sendto(json.dumps(arm_msg).encode("utf-8"), addr)
+    seq += 1
 
     while True:
         t = time.monotonic()

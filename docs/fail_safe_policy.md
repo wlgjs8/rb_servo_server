@@ -13,8 +13,10 @@ No failure path may output [0, 0, 0, 0, 0, 0] unless that was a validated user c
 | Situation | Behavior |
 |---|---|
 | stale command | Hold previous safe target |
-| missing `q_target_deg` for `JointTarget` | convert to Hold |
-| malformed array length | convert to Hold |
+| malformed JSON or unknown mode | Drop packet; command buffer is unchanged |
+| missing `q_target_deg` for `JointTarget` | Drop packet; command buffer is unchanged |
+| malformed numeric payload or array length | Drop packet; command buffer is unchanged |
+| `timeout_sec <= 0` | Drop packet; command buffer is unchanged |
 | unsupported Cartesian command | Hold previous safe target |
 | future IK failure | Hold previous safe target or fault latch |
 | joint command outside limits | clamp to configured limits |
@@ -23,6 +25,21 @@ No failure path may output [0, 0, 0, 0, 0, 0] unless that was a validated user c
 | tracking error in real | latch fault by default |
 | robot disconnected/error | latch current/last-safe pose by default |
 | EmergencyStop | latch current/last-safe pose |
+| ResetFault | clear fault only; return to ConnectedHold |
+| sendServoJ failure in mock/rbsim | failed arm target is not recorded; optional stop-both latch |
+| sendServoJ failure in real | fault latch |
+
+## Motion state
+
+The server starts in `ConnectedHold`. Motion commands are ignored until an explicit:
+
+```json
+{"seq": 1, "mode": "ArmMotion"}
+```
+
+`DisarmMotion` returns to `ConnectedHold`. `ResetFault` also returns to `ConnectedHold`; it must not resume motion directly.
+
+If a command includes both `EmergencyStop` and `ResetFault`, `EmergencyStop` wins.
 
 ## ResetFault
 
@@ -32,7 +49,19 @@ A fault latch ignores motion commands until reset.
 {"seq": 10, "mode": "ResetFault"}
 ```
 
-After reset, the server re-baselines previous targets to the current actual q if available.
+After reset, the server re-baselines previous targets to the current actual q if available and remains in `ConnectedHold`. Send `ArmMotion` again before sending motion targets.
+
+## Real mode guard
+
+Real mode requires:
+
+- `RB_ALLOW_REAL_ROBOT=1`
+- `servo.enable_realtime_priority=true`
+- successful realtime setup in the servo loop
+- `safety.tracking_error_policy=fault_latch`
+- `safety.stop_both_arms_on_single_arm_error=true`
+- `safety.latch_fault_on_robot_state_error=true`
+- loopback `network.command_bind`, unless `RB_ALLOW_NETWORK_EXPOSURE=1` is explicitly set
 
 ## Future Cartesian/IK rule
 

@@ -21,14 +21,14 @@ public:
     bool start();
     void stop();
 
-private:
-    void threadMain();
-
     bool parseMessage(
         const std::string& message,
         uint64_t receive_time_ns,
         DualArmCommand* out_command
     );
+
+private:
+    void threadMain();
 
 private:
     NetworkConfig config_;

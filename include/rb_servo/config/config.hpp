@@ -63,8 +63,9 @@ struct ServoConfig {
 };
 
 struct NetworkConfig {
-    std::string command_bind = "udp://0.0.0.0:50010";
+    std::string command_bind = "udp://127.0.0.1:50010";
     std::string state_pub_bind = "udp://127.0.0.1:50110";
+    double command_timeout_sec = 0.2;
 };
 
 struct LoggingConfig {
