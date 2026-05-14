@@ -80,7 +80,7 @@ void ServoLogger::threadMain() {
 }
 
 void ServoLogger::writeHeader() {
-    file_ << "tick,loop_start_time_ns,loop_end_time_ns,period_ms,jitter_ms,filter_dt_ms,safety_verdict,fault_latched,fault_reason,logger_dropped_samples,command_seq,left_mode,right_mode,left_send_ok,right_send_ok";
+    file_ << "tick,loop_start_time_ns,loop_end_time_ns,period_ms,jitter_ms,filter_dt_ms,safety_verdict,motion_state,fault_latched,fault_reason,logger_dropped_samples,command_seq,left_mode,right_mode,left_send_ok,right_send_ok";
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",right_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_sent_" << i;
@@ -117,6 +117,7 @@ void ServoLogger::writeSample(const ServoSample& sample) {
           << sample.jitter_ms << ','
           << sample.filter_dt_ms << ','
           << toString(sample.safety_verdict) << ','
+          << toString(sample.motion_state) << ','
           << sample.fault_latched << ','
           << csvEscape(sample.fault_reason) << ','
           << droppedSamples() << ','

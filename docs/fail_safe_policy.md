@@ -18,10 +18,12 @@ No failure path may output [0, 0, 0, 0, 0, 0] unless that was a validated user c
 | malformed numeric payload or array length | Drop packet; command buffer is unchanged |
 | `timeout_sec <= 0` | Drop packet; command buffer is unchanged |
 | invalid timeout already inside command buffer | Hold; do not substitute a default motion timeout |
+| lifecycle command immediately followed by a motion command | Process lifecycle command first; then the latest motion command |
 | unsupported Cartesian command | Hold previous safe target |
 | future IK failure | Hold previous safe target or fault latch |
 | joint command outside limits | clamp to configured limits |
 | one late servo tick | filter dt is capped |
+| invalid or missing robot joint state | Startup fails; runtime latches/holds last safe pose according to policy |
 | tracking error in mock/rbsim | snap target to actual by default |
 | tracking error in real | latch fault by default |
 | robot disconnected/error | latch current/last-safe pose by default |
@@ -62,7 +64,13 @@ Real mode requires:
 - `safety.tracking_error_policy=fault_latch`
 - `safety.stop_both_arms_on_single_arm_error=true`
 - `safety.latch_fault_on_robot_state_error=true`
-- loopback `network.command_bind`, unless `RB_ALLOW_NETWORK_EXPOSURE=1` is explicitly set
+- loopback `network.command_bind` and `network.state_pub_bind`, unless `RB_ALLOW_NETWORK_EXPOSURE=1` is explicitly set
+
+## Robot State Validity
+
+Startup requires both backends to return a connected, error-free, finite joint state inside configured joint limits. Backends must set `RobotState::has_valid_joint_state=true` only after reading real joint data from a trusted source.
+
+Until the rbpodo data channel is implemented, `RbpodoBackend` refuses to report valid state or accept servo targets even when compiled with `RB_SERVO_ENABLE_RBPODO=ON`.
 
 ## Future Cartesian/IK rule
 

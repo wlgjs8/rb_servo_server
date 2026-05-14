@@ -125,6 +125,7 @@ struct RobotState {
     JointArray q_actual_deg{};
     JointArray q_target_deg{};
     JointArray dq_actual_deg_s{};
+    bool has_valid_joint_state = false;
 
     Pose6D tcp_base;
     Pose6D tcp_stand;

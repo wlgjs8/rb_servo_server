@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--rate", type=float, default=20.0)
     parser.add_argument("--amp-deg", type=float, default=3.0)
     parser.add_argument("--freq", type=float, default=0.1)
+    parser.add_argument("--arm-settle-sec", type=float, default=0.1)
     args = parser.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -34,6 +35,8 @@ def main() -> None:
     }
     sock.sendto(json.dumps(arm_msg).encode("utf-8"), addr)
     seq += 1
+    if args.arm_settle_sec > 0.0:
+        time.sleep(args.arm_settle_sec)
 
     while True:
         t = time.monotonic()

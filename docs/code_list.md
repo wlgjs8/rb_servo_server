@@ -8,7 +8,7 @@
 ## Core
 
 - `include/rb_servo/core/types.hpp` / `src/core/types.cpp`  
-  Shared enums and data types: joint arrays, poses, wrench, robot state, commands, force-control commands, servo samples.
+  Shared enums and data types: joint arrays, poses, wrench, robot state, commands, force-control commands, servo samples. `RobotState::has_valid_joint_state` gates startup and safe hold target selection.
 
 - `include/rb_servo/core/clock.hpp` / `src/core/clock.cpp`  
   Steady-clock timestamp helpers.
@@ -33,7 +33,7 @@
   First-order mock plant for no-robot development.
 
 - `include/rb_servo/robot/rbpodo_backend.hpp` / `src/robot/rbpodo_backend.cpp`  
-  Placeholder for real Rainbow/rbsim backend. Requires rbpodo integration.
+  Placeholder for real Rainbow/rbsim backend. It refuses to report valid joint state or accept servo targets until rbpodo state/servo integration is implemented.
 
 - `include/rb_servo/robot/backend_factory.hpp` / `src/robot/backend_factory.cpp`  
   Creates backend from config.
@@ -41,7 +41,7 @@
 ## Control
 
 - `include/rb_servo/control/command_buffer.hpp` / `src/control/command_buffer.cpp`  
-  Latest-command-wins buffer with stale-command fallback to Hold. Invalid stored timeout values also resolve to Hold instead of a hard-coded recovery timeout.
+  Latest-motion-wins buffer with a small lifecycle-command queue. Stale commands fall back to Hold. Invalid stored timeout values also resolve to Hold instead of a hard-coded recovery timeout.
 
 - `include/rb_servo/control/trajectory_filter.hpp` / `src/control/trajectory_filter.cpp`  
   Joint target/velocity handling and velocity clamp. Hold returns previous sent target.
@@ -61,7 +61,7 @@
 ## Network
 
 - `include/rb_servo/network/command_server.hpp` / `src/network/command_server.cpp`  
-  UDP JSON command receiver.
+  UDP JSON command receiver. `start()` waits for bind readiness and fails startup if command ingress cannot bind.
 
 - `include/rb_servo/network/state_publisher.hpp` / `src/network/state_publisher.cpp`  
   Placeholder for state publishing to Python.

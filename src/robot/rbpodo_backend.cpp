@@ -42,9 +42,8 @@ bool RbpodoBackend::connect() {
             throw std::runtime_error("Refusing real robot mode. Set RB_ALLOW_REAL_ROBOT=1.");
         }
     }
-    // TODO: impl_->robot = std::make_unique<rb::podo::Cobot>(impl_->config.ip);
-    impl_->connected = true;
-    return true;
+    std::cerr << "[ERROR] RbpodoBackend state/servo implementation is incomplete; refusing to connect.\n";
+    return false;
 #endif
 }
 
@@ -68,8 +67,9 @@ bool RbpodoBackend::readState(RobotState& out_state) {
     out_state.arm_id = impl_->arm_id;
     out_state.host_time_ns = nowSteadyNs();
     out_state.connection_state = impl_->connected ? RobotConnectionState::Connected : RobotConnectionState::Disconnected;
+    out_state.has_valid_joint_state = false;
     // TODO: read q_actual, q_target, error state through rbpodo data channel.
-    return impl_->connected;
+    return false;
 #endif
 }
 
@@ -80,7 +80,7 @@ bool RbpodoBackend::sendServoJ(const JointArray& q_target_deg) {
 #else
     // TODO: call rbpodo move_servo_j with config parameters.
     (void)q_target_deg;
-    return impl_->connected;
+    return false;
 #endif
 }
 
@@ -89,7 +89,7 @@ bool RbpodoBackend::stop() {
     return false;
 #else
     // TODO: call stop/hold method.
-    return true;
+    return false;
 #endif
 }
 
@@ -98,7 +98,7 @@ bool RbpodoBackend::resetFault() {
     return false;
 #else
     // TODO: call reset fault/recover if available.
-    return true;
+    return false;
 #endif
 }
 

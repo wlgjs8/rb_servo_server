@@ -36,6 +36,7 @@ bool MockBackend::readState(RobotState& out_state) {
     out_state.host_time_ns = now;
     out_state.q_actual_deg = q_actual_deg_;
     out_state.q_target_deg = q_target_deg_;
+    out_state.has_valid_joint_state = true;
     out_state.connection_state = connected_ ? RobotConnectionState::Connected : RobotConnectionState::Disconnected;
     out_state.servo_enabled = initialized_;
     out_state.has_error = false;
