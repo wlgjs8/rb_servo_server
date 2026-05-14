@@ -30,6 +30,10 @@ public:
     void stop();
 
     bool isRunning() const;
+    ServerMotionState motionState() const;
+    bool faultLatched() const;
+    SafetyVerdict latchedFaultReason() const;
+    ServoTarget previousSentTarget() const;
 
 private:
     void loopMain();
@@ -67,6 +71,10 @@ private:
 
     bool commandRequestsResetFault(const DualArmCommand& command) const;
     bool commandRequestsEmergencyStop(const DualArmCommand& command) const;
+    bool commandRequestsArmMotion(const DualArmCommand& command) const;
+    bool commandRequestsDisarmMotion(const DualArmCommand& command) const;
+    bool commandRequestsMotion(const DualArmCommand& command) const;
+    bool motionAllowed() const;
     void clearFaultLatch(const RobotState& left_state, const RobotState& right_state);
     void latchFault(
         SafetyVerdict verdict,
@@ -74,6 +82,7 @@ private:
         const RobotState& left_state,
         const RobotState& right_state
     );
+    void setMotionState(ServerMotionState state);
     ServoTarget currentFaultHoldTarget() const;
     JointArray chooseSafeHoldTarget(const RobotState& state, const JointArray& previous_sent) const;
     double computeFilterDtSec(uint64_t actual_period_ns, uint64_t nominal_period_ns) const;
@@ -103,8 +112,10 @@ private:
     JointArray left_prevprev_sent_q_deg_{};
     JointArray right_prevprev_sent_q_deg_{};
 
+    std::atomic<ServerMotionState> motion_state_{ServerMotionState::Disconnected};
     bool fault_latched_ = false;
     SafetyVerdict fault_verdict_ = SafetyVerdict::Ok;
+    SafetyVerdict latched_fault_reason_ = SafetyVerdict::Ok;
     std::string fault_reason_;
     JointArray left_fault_hold_q_deg_{};
     JointArray right_fault_hold_q_deg_{};

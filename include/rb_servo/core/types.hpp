@@ -25,6 +25,8 @@ enum class BackendType { Rbpodo, Mock };
 enum class ControlMode {
     Idle,
     Hold,
+    ArmMotion,
+    DisarmMotion,
     JointTarget,
     JointVelocity,
     TcpPoseTarget,
@@ -32,6 +34,15 @@ enum class ControlMode {
     TcpDeltaLocal,
     EmergencyStop,
     ResetFault
+};
+
+enum class ServerMotionState {
+    Disconnected,
+    ConnectedHold,
+    ArmedHold,
+    Running,
+    FaultLatched,
+    EmergencyLatched
 };
 
 enum class ForceControlMode {
@@ -52,10 +63,12 @@ enum class SafetyVerdict {
     JointLimitClamped,
     TrackingError,
     RobotStateError,
+    SendFailure,
     EmergencyStop,
     FaultLatched,
     InvalidCommand,
     CartesianUnavailable,
+    IkFailed,
     UnknownError
 };
 
@@ -192,12 +205,14 @@ struct ServoSample {
     double filter_dt_ms = 0.0;
 
     SafetyVerdict safety_verdict = SafetyVerdict::Ok;
+    ServerMotionState motion_state = ServerMotionState::Disconnected;
     bool fault_latched = false;
     std::string fault_reason;
 };
 
 std::string toString(ArmId arm_id);
 std::string toString(ControlMode mode);
+std::string toString(ServerMotionState state);
 std::string toString(ForceControlMode mode);
 std::string toString(SafetyVerdict verdict);
 std::string toString(TrackingErrorPolicy policy);

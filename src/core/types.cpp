@@ -22,6 +22,8 @@ std::string toString(ControlMode mode) {
     switch (mode) {
         case ControlMode::Idle: return "Idle";
         case ControlMode::Hold: return "Hold";
+        case ControlMode::ArmMotion: return "ArmMotion";
+        case ControlMode::DisarmMotion: return "DisarmMotion";
         case ControlMode::JointTarget: return "JointTarget";
         case ControlMode::JointVelocity: return "JointVelocity";
         case ControlMode::TcpPoseTarget: return "TcpPoseTarget";
@@ -29,6 +31,18 @@ std::string toString(ControlMode mode) {
         case ControlMode::TcpDeltaLocal: return "TcpDeltaLocal";
         case ControlMode::EmergencyStop: return "EmergencyStop";
         case ControlMode::ResetFault: return "ResetFault";
+    }
+    return "Unknown";
+}
+
+std::string toString(ServerMotionState state) {
+    switch (state) {
+        case ServerMotionState::Disconnected: return "Disconnected";
+        case ServerMotionState::ConnectedHold: return "ConnectedHold";
+        case ServerMotionState::ArmedHold: return "ArmedHold";
+        case ServerMotionState::Running: return "Running";
+        case ServerMotionState::FaultLatched: return "FaultLatched";
+        case ServerMotionState::EmergencyLatched: return "EmergencyLatched";
     }
     return "Unknown";
 }
@@ -49,10 +63,12 @@ std::string toString(SafetyVerdict verdict) {
         case SafetyVerdict::JointLimitClamped: return "JointLimitClamped";
         case SafetyVerdict::TrackingError: return "TrackingError";
         case SafetyVerdict::RobotStateError: return "RobotStateError";
+        case SafetyVerdict::SendFailure: return "SendFailure";
         case SafetyVerdict::EmergencyStop: return "EmergencyStop";
         case SafetyVerdict::FaultLatched: return "FaultLatched";
         case SafetyVerdict::InvalidCommand: return "InvalidCommand";
         case SafetyVerdict::CartesianUnavailable: return "CartesianUnavailable";
+        case SafetyVerdict::IkFailed: return "IkFailed";
         case SafetyVerdict::UnknownError: return "UnknownError";
     }
     return "Unknown";
@@ -70,6 +86,8 @@ ControlMode controlModeFromString(const std::string& mode) {
     const std::string m = lower(mode);
     if (m == "idle") return ControlMode::Idle;
     if (m == "hold") return ControlMode::Hold;
+    if (m == "armmotion" || m == "arm_motion" || m == "arm") return ControlMode::ArmMotion;
+    if (m == "disarmmotion" || m == "disarm_motion" || m == "disarm") return ControlMode::DisarmMotion;
     if (m == "jointtarget" || m == "joint_target") return ControlMode::JointTarget;
     if (m == "jointvelocity" || m == "joint_velocity") return ControlMode::JointVelocity;
     if (m == "tcpposetarget" || m == "tcp_pose_target") return ControlMode::TcpPoseTarget;
