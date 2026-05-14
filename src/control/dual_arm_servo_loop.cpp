@@ -203,7 +203,16 @@ void DualArmServoLoop::loopMain() {
 
         bool left_ok = false;
         bool right_ok = false;
-        sendTargets(safe_target, &left_ok, &right_ok);
+        const ServoTarget attempted_target = safe_target;
+        sendTargets(attempted_target, &left_ok, &right_ok);
+        if (!left_ok || !right_ok) {
+            safety_verdict = SafetyVerdict::SendFailure;
+            if (isRealMode() || config_.safety.stop_both_arms_on_single_arm_error) {
+                latchFault(SafetyVerdict::SendFailure, "sendServoJ failed", left_state, right_state);
+                safe_target = currentFaultHoldTarget();
+                safety_verdict = SafetyVerdict::FaultLatched;
+            }
+        }
 
         const uint64_t loop_end = nowSteadyNs();
 
@@ -214,8 +223,8 @@ void DualArmServoLoop::loopMain() {
         sample.left_state = left_state;
         sample.right_state = right_state;
         sample.command = command;
-        sample.left_sent_q_deg = safe_target.left_q_target_deg;
-        sample.right_sent_q_deg = safe_target.right_q_target_deg;
+        sample.left_sent_q_deg = attempted_target.left_q_target_deg;
+        sample.right_sent_q_deg = attempted_target.right_q_target_deg;
         sample.left_send_ok = left_ok;
         sample.right_send_ok = right_ok;
         sample.period_ms = nsToMs(actual_period_ns);
@@ -232,10 +241,14 @@ void DualArmServoLoop::loopMain() {
             logger_->push(sample);
         }
 
-        left_prevprev_sent_q_deg_ = left_prev_sent_q_deg_;
-        right_prevprev_sent_q_deg_ = right_prev_sent_q_deg_;
-        left_prev_sent_q_deg_ = safe_target.left_q_target_deg;
-        right_prev_sent_q_deg_ = safe_target.right_q_target_deg;
+        if (left_ok) {
+            left_prevprev_sent_q_deg_ = left_prev_sent_q_deg_;
+            left_prev_sent_q_deg_ = attempted_target.left_q_target_deg;
+        }
+        if (right_ok) {
+            right_prevprev_sent_q_deg_ = right_prev_sent_q_deg_;
+            right_prev_sent_q_deg_ = attempted_target.right_q_target_deg;
+        }
 
         std::this_thread::sleep_until(next_tick);
     }
@@ -323,10 +336,6 @@ ServoTarget DualArmServoLoop::applySafety(
             // 개발/mock/rbsim용 복구 정책: 현재 실제 자세를 새 안전 기준점으로 삼고 그 자리에서 멈춘다.
             out.left_q_target_deg = left_state.q_actual_deg;
             out.right_q_target_deg = right_state.q_actual_deg;
-            left_prev_sent_q_deg_ = left_state.q_actual_deg;
-            right_prev_sent_q_deg_ = right_state.q_actual_deg;
-            left_prevprev_sent_q_deg_ = left_state.q_actual_deg;
-            right_prevprev_sent_q_deg_ = right_state.q_actual_deg;
         } else {
             latchFault(SafetyVerdict::TrackingError, "tracking error exceeded threshold", left_state, right_state);
             out = currentFaultHoldTarget();
@@ -395,6 +404,10 @@ bool DualArmServoLoop::commandRequestsMotion(const DualArmCommand& command) cons
 bool DualArmServoLoop::motionAllowed() const {
     const ServerMotionState state = motion_state_.load();
     return state == ServerMotionState::ArmedHold || state == ServerMotionState::Running;
+}
+
+bool DualArmServoLoop::isRealMode() const {
+    return config_.left_robot.run_mode == RunMode::Real || config_.right_robot.run_mode == RunMode::Real;
 }
 
 void DualArmServoLoop::clearFaultLatch(const RobotState& left_state, const RobotState& right_state) {

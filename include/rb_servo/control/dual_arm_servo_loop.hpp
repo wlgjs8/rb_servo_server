@@ -75,6 +75,7 @@ private:
     bool commandRequestsDisarmMotion(const DualArmCommand& command) const;
     bool commandRequestsMotion(const DualArmCommand& command) const;
     bool motionAllowed() const;
+    bool isRealMode() const;
     void clearFaultLatch(const RobotState& left_state, const RobotState& right_state);
     void latchFault(
         SafetyVerdict verdict,
