@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <mutex>
 
@@ -125,7 +126,12 @@ bool DualArmServoLoop::initializeRobots() {
     }
 
     RobotState left, right;
-    readRobotStates(left, right);
+    if (!readRobotStates(left, right) ||
+        !isValidRobotStateForStartup(left) ||
+        !isValidRobotStateForStartup(right)) {
+        std::cerr << "[ERROR] invalid robot startup state\n";
+        return false;
+    }
     left_prev_sent_q_deg_ = left.q_actual_deg;
     left_prevprev_sent_q_deg_ = left.q_actual_deg;
     right_prev_sent_q_deg_ = right.q_actual_deg;
@@ -163,7 +169,7 @@ void DualArmServoLoop::loopMain() {
 
         RobotState left_state;
         RobotState right_state;
-        readRobotStates(left_state, right_state);
+        const bool state_ok = readRobotStates(left_state, right_state);
 
         DualArmCommand command = command_buffer_
             ? command_buffer_->latestOrHold(loop_start)
@@ -194,7 +200,17 @@ void DualArmServoLoop::loopMain() {
         ServoTarget safe_target;
         SafetyVerdict safety_verdict = SafetyVerdict::Ok;
 
-        if (fault_latched_.load()) {
+        if (!state_ok || !isValidJointState(left_state) || !isValidJointState(right_state)) {
+            safety_verdict = SafetyVerdict::RobotStateError;
+            if (isRealMode() || config_.safety.latch_fault_on_robot_state_error) {
+                latchFault(SafetyVerdict::RobotStateError, "robot state read failed or invalid", left_state, right_state);
+                safe_target = currentFaultHoldTarget();
+                safety_verdict = SafetyVerdict::FaultLatched;
+            } else {
+                safe_target.left_q_target_deg = left_prev_sent_q_deg_;
+                safe_target.right_q_target_deg = right_prev_sent_q_deg_;
+            }
+        } else if (fault_latched_.load()) {
             safe_target = currentFaultHoldTarget();
             safety_verdict = SafetyVerdict::FaultLatched;
         } else {
@@ -290,9 +306,26 @@ bool DualArmServoLoop::configureRealtimeForLoop() {
     return true;
 }
 
-void DualArmServoLoop::readRobotStates(RobotState& left, RobotState& right) {
-    left_robot_->readState(left);
-    right_robot_->readState(right);
+bool DualArmServoLoop::readRobotStates(RobotState& left, RobotState& right) {
+    const bool left_ok = left_robot_ && left_robot_->readState(left);
+    const bool right_ok = right_robot_ && right_robot_->readState(right);
+    return left_ok && right_ok;
+}
+
+bool DualArmServoLoop::isValidJointState(const RobotState& state) const {
+    if (state.connection_state != RobotConnectionState::Connected) return false;
+    if (!state.has_valid_joint_state) return false;
+    if (state.has_error) return false;
+    for (int i = 0; i < kDof; ++i) {
+        const double q = state.q_actual_deg[i];
+        if (!std::isfinite(q)) return false;
+        if (q < config_.safety.q_min_deg[i] || q > config_.safety.q_max_deg[i]) return false;
+    }
+    return true;
+}
+
+bool DualArmServoLoop::isValidRobotStateForStartup(const RobotState& state) const {
+    return isValidJointState(state);
 }
 
 ServoTarget DualArmServoLoop::computeServoTarget(
@@ -412,8 +445,8 @@ DualArmCommand DualArmServoLoop::makeHoldCommand(
     cmd.right.arm_id = ArmId::Right;
     cmd.left.mode = ControlMode::Hold;
     cmd.right.mode = ControlMode::Hold;
-    cmd.left.q_target_deg = left_state.q_actual_deg;
-    cmd.right.q_target_deg = right_state.q_actual_deg;
+    cmd.left.q_target_deg = chooseSafeHoldTarget(left_state, left_prev_sent_q_deg_);
+    cmd.right.q_target_deg = chooseSafeHoldTarget(right_state, right_prev_sent_q_deg_);
     return cmd;
 }
 
@@ -500,7 +533,7 @@ JointArray DualArmServoLoop::chooseSafeHoldTarget(
     const RobotState& state,
     const JointArray& previous_sent
 ) const {
-    if (state.connection_state == RobotConnectionState::Connected) {
+    if (isValidJointState(state)) {
         return state.q_actual_deg;
     }
     return previous_sent;

@@ -1,9 +1,16 @@
 #include <chrono>
 #include <cmath>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 #include "rb_servo/config/config.hpp"
 #include "rb_servo/control/command_buffer.hpp"
@@ -57,6 +64,7 @@ public:
         out_state.host_time_ns = rb_servo::nowSteadyNs();
         out_state.q_actual_deg = q_actual_;
         out_state.q_target_deg = q_target_;
+        out_state.has_valid_joint_state = valid_joint_state_;
         out_state.connection_state = connected_
             ? rb_servo::RobotConnectionState::Connected
             : rb_servo::RobotConnectionState::Disconnected;
@@ -78,11 +86,14 @@ public:
     rb_servo::ArmId armId() const override { return arm_id_; }
     std::string name() const override { return "test"; }
 
+    void setValidJointState(bool valid) { valid_joint_state_ = valid; }
+
 private:
     rb_servo::ArmId arm_id_;
     rb_servo::JointArray q_actual_{};
     rb_servo::JointArray q_target_{};
     bool fail_send_ = false;
+    bool valid_joint_state_ = true;
     bool connected_ = false;
     bool initialized_ = false;
 };
@@ -122,6 +133,29 @@ rb_servo::DualArmCommand command(rb_servo::ControlMode mode) {
 
 void sleepTicks() {
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
+}
+
+int reserveLoopbackUdpPort() {
+    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        ::close(fd);
+        return -1;
+    }
+
+    socklen_t len = sizeof(addr);
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    const int port = ntohs(addr.sin_port);
+    ::close(fd);
+    return port;
 }
 
 bool testCommandValidation() {
@@ -177,6 +211,157 @@ bool testCommandBufferInvalidTimeoutHolds() {
     latest = buffer.latestOrHold(target.host_time_ns + 200'000'000ULL);
     RB_CHECK(latest.left.mode == rb_servo::ControlMode::Hold);
     RB_CHECK(latest.right.mode == rb_servo::ControlMode::Hold);
+    return true;
+}
+
+bool testLifecycleCommandSurvivesMotionOverwrite() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmCommand arm = command(rb_servo::ControlMode::ArmMotion);
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.left.q_target_deg = joints(3.0);
+    target.right.q_target_deg = joints(3.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+
+    const uint64_t now = rb_servo::nowSteadyNs();
+    arm.host_time_ns = now;
+    target.host_time_ns = now + 1;
+
+    buffer.setCommand(arm);
+    buffer.setCommand(target);
+
+    rb_servo::DualArmCommand first = buffer.latestOrHold(now + 2);
+    RB_CHECK(first.left.mode == rb_servo::ControlMode::ArmMotion);
+    RB_CHECK(first.right.mode == rb_servo::ControlMode::ArmMotion);
+
+    rb_servo::DualArmCommand second = buffer.latestOrHold(now + 3);
+    RB_CHECK(second.left.mode == rb_servo::ControlMode::JointTarget);
+    RB_CHECK(second.right.mode == rb_servo::ControlMode::JointTarget);
+    RB_CHECK(sameJointArray(second.left.q_target_deg, joints(3.0)));
+    return true;
+}
+
+bool testCommandServerStartFailsOnInvalidBind() {
+    rb_servo::NetworkConfig network;
+    network.command_bind = "udp://invalid-host:50010";
+    rb_servo::CommandBuffer buffer;
+    rb_servo::CommandServer server(network, &buffer);
+    RB_CHECK(!server.start());
+    server.stop();
+    return true;
+}
+
+bool testCommandServerStartFailsOnPortConflict() {
+    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    RB_CHECK(fd >= 0);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::cerr << "bind test socket failed: " << std::strerror(errno) << "\n";
+        ::close(fd);
+        return false;
+    }
+
+    socklen_t len = sizeof(addr);
+    RB_CHECK(::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) == 0);
+    const int port = ntohs(addr.sin_port);
+
+    rb_servo::NetworkConfig network;
+    network.command_bind = "udp://127.0.0.1:" + std::to_string(port);
+    rb_servo::CommandBuffer buffer;
+    rb_servo::CommandServer server(network, &buffer);
+    const bool started = server.start();
+    server.stop();
+    ::close(fd);
+    RB_CHECK(!started);
+    return true;
+}
+
+bool testSecondCommandServerStartFailsOnSamePort() {
+    const int port = reserveLoopbackUdpPort();
+    RB_CHECK(port > 0);
+
+    rb_servo::NetworkConfig network;
+    network.command_bind = "udp://127.0.0.1:" + std::to_string(port);
+    rb_servo::CommandBuffer first_buffer;
+    rb_servo::CommandBuffer second_buffer;
+    rb_servo::CommandServer first(network, &first_buffer);
+    rb_servo::CommandServer second(network, &second_buffer);
+
+    RB_CHECK(first.start());
+    const bool second_started = second.start();
+    second.stop();
+    first.stop();
+    RB_CHECK(!second_started);
+    return true;
+}
+
+bool testRealModeTcpStatePublisherExposureRequiresOverride() {
+    const char* old_allow_real = std::getenv("RB_ALLOW_REAL_ROBOT");
+    const char* old_allow_network = std::getenv("RB_ALLOW_NETWORK_EXPOSURE");
+    const std::string saved_allow_real = old_allow_real ? old_allow_real : "";
+    const std::string saved_allow_network = old_allow_network ? old_allow_network : "";
+
+    setenv("RB_ALLOW_REAL_ROBOT", "1", 1);
+    unsetenv("RB_ALLOW_NETWORK_EXPOSURE");
+
+    const std::string path = "/tmp/rb-servo-real-exposure-" + std::to_string(getpid()) + ".yaml";
+    {
+        std::ofstream file(path);
+        file << "left_robot:\n"
+             << "  backend_type: rbpodo\n"
+             << "  run_mode: real\n"
+             << "right_robot:\n"
+             << "  backend_type: rbpodo\n"
+             << "  run_mode: real\n"
+             << "network:\n"
+             << "  command_bind: \"udp://127.0.0.1:50010\"\n"
+             << "  state_pub_bind: \"tcp://0.0.0.0:50110\"\n";
+    }
+
+    bool rejected = false;
+    try {
+        (void)rb_servo::loadConfigFromYaml(path);
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    ::unlink(path.c_str());
+
+    if (old_allow_real) {
+        setenv("RB_ALLOW_REAL_ROBOT", saved_allow_real.c_str(), 1);
+    } else {
+        unsetenv("RB_ALLOW_REAL_ROBOT");
+    }
+    if (old_allow_network) {
+        setenv("RB_ALLOW_NETWORK_EXPOSURE", saved_allow_network.c_str(), 1);
+    } else {
+        unsetenv("RB_ALLOW_NETWORK_EXPOSURE");
+    }
+
+    RB_CHECK(rejected);
+    return true;
+}
+
+bool testInvalidStartupRobotStateFailsStart() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    const rb_servo::JointArray initial = joints(0.0);
+    auto left = std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false);
+    auto right = std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false);
+    left->setValidJointState(false);
+
+    rb_servo::DualArmServoLoop loop(
+        std::move(left),
+        std::move(right),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(!loop.start());
     return true;
 }
 
@@ -367,6 +552,12 @@ bool testStopBothOnSendFailureLatchesFault() {
 int main() {
     if (!testCommandValidation()) return 1;
     if (!testCommandBufferInvalidTimeoutHolds()) return 1;
+    if (!testLifecycleCommandSurvivesMotionOverwrite()) return 1;
+    if (!testCommandServerStartFailsOnInvalidBind()) return 1;
+    if (!testCommandServerStartFailsOnPortConflict()) return 1;
+    if (!testSecondCommandServerStartFailsOnSamePort()) return 1;
+    if (!testRealModeTcpStatePublisherExposureRequiresOverride()) return 1;
+    if (!testInvalidStartupRobotStateFailsStart()) return 1;
     if (!testEmergencyWinsAndResetDoesNotRun()) return 1;
     if (!testDisarmAndCartesianHoldPreviousTarget()) return 1;
     if (!testJointLimitClamp()) return 1;

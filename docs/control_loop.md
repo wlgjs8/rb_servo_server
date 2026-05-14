@@ -14,8 +14,8 @@ Default mock target:
 1. measure loop_start_time_ns
 2. compute actual period
 3. compute capped filter_dt
-4. read left/right robot state
-5. read latest command from CommandBuffer
+4. read left/right robot state and validate joint state
+5. read pending lifecycle command or latest motion command from CommandBuffer
 6. stale command → Hold
 7. ResetFault command → clear latched fault if present, return to ConnectedHold, and Hold
 8. EmergencyStop command → latch fault hold pose
@@ -59,6 +59,8 @@ On a latched fault, the server holds a dedicated `fault_hold_q` captured from cu
 ## Command timeout
 
 The C++ receive timestamp is authoritative. If the latest command becomes stale, both arms hold by default. If an invalid timeout somehow reaches `CommandBuffer`, the command is converted to Hold; the safety path does not silently substitute a hard-coded timeout.
+
+Lifecycle commands (`ArmMotion`, `DisarmMotion`, `EmergencyStop`, `ResetFault`) are queued separately from the latest motion target. This prevents an immediate `JointTarget` packet from overwriting `ArmMotion` before the servo loop observes it.
 
 ## Safety behavior
 

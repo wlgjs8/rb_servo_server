@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <future>
 #include <string>
 #include <thread>
 
@@ -28,7 +29,7 @@ public:
     );
 
 private:
-    void threadMain();
+    void threadMain(std::promise<bool> startup_result);
 
 private:
     NetworkConfig config_;

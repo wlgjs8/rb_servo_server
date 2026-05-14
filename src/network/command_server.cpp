@@ -238,22 +238,38 @@ CommandServer::~CommandServer() {
 }
 
 bool CommandServer::start() {
-    if (running_) return true;
+    if (thread_.joinable()) return running_.load();
     running_ = true;
-    thread_ = std::thread(&CommandServer::threadMain, this);
-    return true;
+    std::promise<bool> startup_result;
+    std::future<bool> startup_ready = startup_result.get_future();
+    thread_ = std::thread(&CommandServer::threadMain, this, std::move(startup_result));
+    const bool started = startup_ready.get();
+    if (!started) {
+        running_ = false;
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+        return false;
+    }
+    return running_.load();
 }
 
 void CommandServer::stop() {
-    if (!running_) return;
     running_ = false;
     if (thread_.joinable()) {
         thread_.join();
     }
 }
 
-void CommandServer::threadMain() {
+void CommandServer::threadMain(std::promise<bool> startup_result) {
     int socket_fd = -1;
+    bool startup_reported = false;
+    auto report_startup = [&](bool ok) {
+        if (!startup_reported) {
+            startup_result.set_value(ok);
+            startup_reported = true;
+        }
+    };
     auto close_socket = [&]() {
         if (socket_fd >= 0) {
             ::close(socket_fd);
@@ -268,9 +284,6 @@ void CommandServer::threadMain() {
             throw std::runtime_error(std::string("socket() failed: ") + std::strerror(errno));
         }
 
-        int reuse = 1;
-        ::setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(static_cast<uint16_t>(ep.port));
@@ -282,6 +295,7 @@ void CommandServer::threadMain() {
         }
 
         std::cerr << "[INFO] CommandServer listening on " << config_.command_bind << "\n";
+        report_startup(true);
         std::array<char, 8192> buffer{};
         while (running_) {
             fd_set fds;
@@ -320,6 +334,7 @@ void CommandServer::threadMain() {
     } catch (const std::exception& e) {
         std::cerr << "[ERROR] CommandServer failed: " << e.what() << "\n";
         running_ = false;
+        report_startup(false);
     }
     close_socket();
 }

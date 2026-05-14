@@ -41,7 +41,9 @@ private:
     bool configureRealtimeForLoop();
 
     bool initializeRobots();
-    void readRobotStates(RobotState& left, RobotState& right);
+    bool readRobotStates(RobotState& left, RobotState& right);
+    bool isValidRobotStateForStartup(const RobotState& state) const;
+    bool isValidJointState(const RobotState& state) const;
 
     ServoTarget computeServoTarget(
         const RobotState& left_state,

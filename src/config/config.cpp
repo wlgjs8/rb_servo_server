@@ -166,15 +166,24 @@ bool anyReal(const DualArmConfig& cfg) {
     return cfg.left_robot.run_mode == RunMode::Real || cfg.right_robot.run_mode == RunMode::Real;
 }
 
-bool commandBindExposesNetwork(const std::string& bind) {
-    const std::string prefix = "udp://";
-    if (bind.rfind(prefix, 0) != 0) {
-        return false;
+std::string bindHost(const std::string& bind) {
+    const auto scheme = bind.find("://");
+    if (scheme == std::string::npos) return {};
+    const std::string rest = bind.substr(scheme + 3);
+    if (rest.empty()) return {};
+    if (rest.front() == '[') {
+        const auto close = rest.find(']');
+        if (close == std::string::npos) return {};
+        return rest.substr(1, close - 1);
     }
-    const std::string rest = bind.substr(prefix.size());
     const auto colon = rest.rfind(':');
-    const std::string host = colon == std::string::npos ? rest : rest.substr(0, colon);
-    return host == "0.0.0.0" || host == "::" || host == "[::]";
+    return colon == std::string::npos ? rest : rest.substr(0, colon);
+}
+
+bool bindRequiresExposureOverride(const std::string& bind) {
+    const std::string host = bindHost(bind);
+    if (host.empty()) return true;
+    return !(host == "127.0.0.1" || host == "localhost" || host == "::1");
 }
 
 void validatePositiveFinite(double value, const std::string& name) {
@@ -214,10 +223,11 @@ void validateConfig(const DualArmConfig& cfg) {
         if (!cfg.safety.latch_fault_on_robot_state_error) {
             throw std::runtime_error("Refusing real mode without latch_fault_on_robot_state_error=true.");
         }
-        if (commandBindExposesNetwork(cfg.network.command_bind)) {
+        if (bindRequiresExposureOverride(cfg.network.command_bind) ||
+            bindRequiresExposureOverride(cfg.network.state_pub_bind)) {
             const char* allow_network = std::getenv("RB_ALLOW_NETWORK_EXPOSURE");
             if (!allow_network || std::string(allow_network) != "1") {
-                throw std::runtime_error("Refusing exposed command_bind in real mode. Set RB_ALLOW_NETWORK_EXPOSURE=1.");
+                throw std::runtime_error("Refusing exposed network bind in real mode. Set RB_ALLOW_NETWORK_EXPOSURE=1.");
             }
         }
     }

@@ -39,7 +39,7 @@ safety:
 
 network:
   command_bind: "udp://127.0.0.1:50010"
-  state_pub_bind: "tcp://127.0.0.1:50110"
+  state_pub_bind: "udp://127.0.0.1:50110"
 
 logging:
   enable: true
