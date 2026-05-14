@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -161,6 +162,67 @@ void applyBackendSection(const Section& sec, BackendConfig* cfg) {
     if (has(sec, "disable_waiting_ack")) cfg->disable_waiting_ack = parseBool(sec.at("disable_waiting_ack"));
 }
 
+bool anyReal(const DualArmConfig& cfg) {
+    return cfg.left_robot.run_mode == RunMode::Real || cfg.right_robot.run_mode == RunMode::Real;
+}
+
+bool commandBindExposesNetwork(const std::string& bind) {
+    const std::string prefix = "udp://";
+    if (bind.rfind(prefix, 0) != 0) {
+        return false;
+    }
+    const std::string rest = bind.substr(prefix.size());
+    const auto colon = rest.rfind(':');
+    const std::string host = colon == std::string::npos ? rest : rest.substr(0, colon);
+    return host == "0.0.0.0" || host == "::" || host == "[::]";
+}
+
+void validatePositiveFinite(double value, const std::string& name) {
+    if (!(value > 0.0) || !std::isfinite(value)) {
+        throw std::runtime_error(name + " must be positive and finite");
+    }
+}
+
+void validateConfig(const DualArmConfig& cfg) {
+    validatePositiveFinite(static_cast<double>(cfg.servo.rate_hz), "servo.rate_hz");
+    validatePositiveFinite(cfg.servo.command_timeout_sec, "servo.command_timeout_sec");
+    validatePositiveFinite(cfg.safety.command_timeout_sec, "safety.command_timeout_sec");
+    validatePositiveFinite(cfg.safety.max_tracking_error_deg, "safety.max_tracking_error_deg");
+    validatePositiveFinite(cfg.servo.filter_dt_min_ratio, "servo.filter_dt_min_ratio");
+    validatePositiveFinite(cfg.servo.filter_dt_max_ratio, "servo.filter_dt_max_ratio");
+    if (cfg.servo.filter_dt_max_ratio < cfg.servo.filter_dt_min_ratio) {
+        throw std::runtime_error("servo.filter_dt_max_ratio must be >= filter_dt_min_ratio");
+    }
+    if (cfg.servo.realtime_priority < 1 || cfg.servo.realtime_priority > 99) {
+        throw std::runtime_error("servo.realtime_priority must be in [1, 99]");
+    }
+
+    if (anyReal(cfg)) {
+        const char* allow = std::getenv("RB_ALLOW_REAL_ROBOT");
+        if (!allow || std::string(allow) != "1") {
+            throw std::runtime_error("Refusing real mode. Set RB_ALLOW_REAL_ROBOT=1.");
+        }
+        if (!cfg.servo.enable_realtime_priority) {
+            throw std::runtime_error("Refusing real mode without servo.enable_realtime_priority=true.");
+        }
+        if (cfg.safety.tracking_error_policy != TrackingErrorPolicy::FaultLatch) {
+            throw std::runtime_error("Refusing real mode without safety.tracking_error_policy=fault_latch.");
+        }
+        if (!cfg.safety.stop_both_arms_on_single_arm_error) {
+            throw std::runtime_error("Refusing real mode without stop_both_arms_on_single_arm_error=true.");
+        }
+        if (!cfg.safety.latch_fault_on_robot_state_error) {
+            throw std::runtime_error("Refusing real mode without latch_fault_on_robot_state_error=true.");
+        }
+        if (commandBindExposesNetwork(cfg.network.command_bind)) {
+            const char* allow_network = std::getenv("RB_ALLOW_NETWORK_EXPOSURE");
+            if (!allow_network || std::string(allow_network) != "1") {
+                throw std::runtime_error("Refusing exposed command_bind in real mode. Set RB_ALLOW_NETWORK_EXPOSURE=1.");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 DualArmConfig loadConfigFromYaml(const std::string& path) {
@@ -263,13 +325,7 @@ DualArmConfig loadConfigFromYaml(const std::string& path) {
         cfg.safety.tracking_error_policy = TrackingErrorPolicy::FaultLatch;
     }
 
-    const bool any_real = cfg.left_robot.run_mode == RunMode::Real || cfg.right_robot.run_mode == RunMode::Real;
-    if (any_real) {
-        const char* allow = std::getenv("RB_ALLOW_REAL_ROBOT");
-        if (!allow || std::string(allow) != "1") {
-            throw std::runtime_error("Refusing real mode. Set RB_ALLOW_REAL_ROBOT=1.");
-        }
-    }
+    validateConfig(cfg);
 
     std::cerr << "[INFO] loaded config: " << path << "\n";
     return cfg;

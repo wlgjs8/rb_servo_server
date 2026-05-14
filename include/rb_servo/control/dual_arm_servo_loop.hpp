@@ -37,6 +37,7 @@ public:
 
 private:
     void loopMain();
+    bool configureRealtimeForLoop();
 
     bool initializeRobots();
     void readRobotStates(RobotState& left, RobotState& right);
@@ -102,6 +103,8 @@ private:
     SafetyFilter safety_filter_;
 
     std::atomic<bool> running_{false};
+    std::atomic<bool> startup_complete_{false};
+    std::atomic<bool> startup_ok_{false};
     std::thread thread_;
 
     uint64_t tick_ = 0;

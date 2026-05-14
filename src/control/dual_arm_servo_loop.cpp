@@ -66,12 +66,21 @@ bool DualArmServoLoop::start() {
         return false;
     }
     running_ = true;
+    startup_complete_ = false;
+    startup_ok_ = false;
     thread_ = std::thread(&DualArmServoLoop::loopMain, this);
+    for (int i = 0; i < 100; ++i) {
+        if (startup_complete_.load()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!startup_complete_.load() || !startup_ok_.load()) {
+        stop();
+        return false;
+    }
     return true;
 }
 
 void DualArmServoLoop::stop() {
-    if (!running_) return;
     running_ = false;
     if (thread_.joinable()) {
         thread_.join();
@@ -126,13 +135,14 @@ bool DualArmServoLoop::initializeRobots() {
 }
 
 void DualArmServoLoop::loopMain() {
-    if (config_.servo.enable_realtime_priority) {
-        lockMemory();
-        setCurrentThreadRealtimePriority(config_.servo.realtime_priority);
+    if (!configureRealtimeForLoop()) {
+        startup_ok_ = false;
+        startup_complete_ = true;
+        running_ = false;
+        return;
     }
-    if (config_.servo.cpu_core >= 0) {
-        pinCurrentThreadToCpu(config_.servo.cpu_core);
-    }
+    startup_ok_ = true;
+    startup_complete_ = true;
 
     const int rate_hz = config_.servo.rate_hz > 0 ? config_.servo.rate_hz : 200;
     const auto period = std::chrono::nanoseconds(static_cast<long long>(1'000'000'000LL / rate_hz));
@@ -252,6 +262,23 @@ void DualArmServoLoop::loopMain() {
 
         std::this_thread::sleep_until(next_tick);
     }
+}
+
+bool DualArmServoLoop::configureRealtimeForLoop() {
+    bool ok = true;
+    if (config_.servo.enable_realtime_priority) {
+        ok = lockMemory() && ok;
+        ok = setCurrentThreadRealtimePriority(config_.servo.realtime_priority) && ok;
+    }
+    if (config_.servo.cpu_core >= 0) {
+        ok = pinCurrentThreadToCpu(config_.servo.cpu_core) && ok;
+    }
+
+    if (!ok && isRealMode()) {
+        std::cerr << "[ERROR] realtime setup failed in real mode\n";
+        return false;
+    }
+    return true;
 }
 
 void DualArmServoLoop::readRobotStates(RobotState& left, RobotState& right) {
