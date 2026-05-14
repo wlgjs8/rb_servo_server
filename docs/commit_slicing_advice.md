@@ -114,6 +114,7 @@ separate commits whenever a change touches more than one:
 | Operator tools   | `tools/*.py`                                               | Ergonomics, no runtime impact    |
 | Policy docs      | `docs/*.md`, `rb-servo-server.md`                          | Prose review only                |
 | Regression tests | `tests/*.cpp`                                              | Lock behavior post-implementation |
+| Review evidence  | `.omx/autoloop/*`, `.omx/context/*`                        | Audit trail only, no runtime impact |
 
 Mixing two layers in one commit is fine **when the change is causally
 indivisible** (e.g. `f406f93` had to land config defaults + startup guard
@@ -161,3 +162,95 @@ Resist the urge to slice when:
   larger atomic commit.
 - The change is a pure rename or mechanical refactor — slicing those
   inflates review burden without adding revertability.
+
+## 7. Review-evidence and autoloop artifact commits
+
+Two commits since the original advisory exemplify a sixth concern layer
+the table in §3 missed: **review evidence**.
+
+- `e774bd0` (this advisory itself) — single file `docs/commit_slicing_advice.md`,
+  +163/-0. Docs-only, advisory scope. Reverts cleanly without touching
+  runtime, tests, build, or operator tools.
+- `adc81d9` (`Record critic Go evidence for unattended safety loop`) — two
+  files `.omx/autoloop/critic-iteration-1.md` and
+  `.omx/autoloop/verdict-iteration-1.txt`, +239/-0. Records the
+  architect/critic handoff verdict for an unattended safety loop. No
+  runtime, build, or test surface touched.
+
+Both are model-citizens for the slicing rules above: one concern layer,
+small footprint, body answers Constraint/Rejected/Confidence/Scope-risk/
+Directive, `Tested:` line ties back to the production verification this
+artifact summarises rather than to a build of the artifact itself.
+
+**Recipe for autoloop / critic-evidence commits:**
+
+1. Commit `.omx/autoloop/*` (and `.omx/context/*` when those are the
+   review record) on their own, separate from any docs commit that
+   *describes policy*. Mixing prose policy (`docs/*.md`) with
+   audit-trail evidence (`.omx/autoloop/*`) couples reverts: a future
+   policy softening would otherwise have to keep stale critic evidence
+   alive.
+2. Keep the `Tested:` trailer pointing at the *underlying behavior's*
+   verification commands (cmake/ctest/smoke), even though the artifact
+   commit changed no buildable code. That trailer is what a future
+   bisect uses to recover the verification path; "this commit is
+   docs-only" is true but not load-bearing on its own.
+3. Treat these commits as `Scope-risk: narrow` by default. A
+   `Scope-risk: broad` review-evidence commit usually means the artifact
+   has grown beyond a single iteration's verdict and should itself be
+   sliced (one file per iteration, or split critic-from-architect
+   evidence).
+
+## 8. OMX auto-checkpoint commits must not survive into final history
+
+`adc81d9`'s `Rejected:` line names a hazard worth promoting to a
+first-class rule: **`omx(team)` auto-checkpoint commits and worker-pane
+auto-merge commits must be rewritten before the branch is reviewed.**
+
+Symptoms to look for in `git log main..HEAD`:
+
+- Subjects like `omx(team) auto-checkpoint`, `omx: checkpoint`,
+  `worker-N: wip`, or default `Merge branch ...` lines from worker
+  worktrees.
+- Empty or boilerplate bodies missing the
+  Constraint/Rejected/Confidence/Scope-risk/Directive structure.
+- Author identity `OmX <omx@oh-my-codex.dev>` as the sole author
+  (co-authoring is fine; sole authorship by the harness is not).
+
+**Recipe:**
+
+1. Before opening review, rebase the auto-checkpoint range into Lore
+   commits authored by the human/agent that produced the change. Use
+   `git rebase -i main` interactively and squash adjacent
+   auto-checkpoints into the behavior commit they belong to.
+2. Preserve the OmX co-authorship trailer (`Co-authored-by: OmX
+   <omx@oh-my-codex.dev>`) on the rewritten commit — that records the
+   harness's involvement without ceding authorship.
+3. If an auto-checkpoint cannot be cleanly attributed (it spans
+   multiple behavior changes), that itself is a slicing signal: split
+   the diff along behavior boundaries first, then reattribute each
+   slice.
+
+Rule of thumb: **if a reviewer cannot read the commit subject and infer
+the invariant, the commit should not reach `main`.**
+
+## 9. Quick checklist for the next safety-shaped patch series
+
+Use this as the pre-PR gate; each line should be answerable "yes" or
+have a one-line justification recorded in the relevant commit body.
+
+- [ ] Every commit on the branch has a non-empty
+      Constraint/Rejected/Confidence/Scope-risk/Directive body.
+- [ ] No commit body contains literal `\n` escapes (see §2.3).
+- [ ] No `omx(team) auto-checkpoint` or unattributed merge commits
+      remain (see §8).
+- [ ] No commit mixes a wire/parser change with operator tooling
+      (see §2.1).
+- [ ] No commit mixes policy prose with regression tests or build
+      graph changes (see §2.2).
+- [ ] No commit mixes policy prose with `.omx/autoloop/*` evidence
+      (see §7).
+- [ ] Commits land in the order in §4, or the body explains why an
+      order swap was causally indivisible (see §3 last paragraph).
+- [ ] No commit exceeds the §5 size thresholds without a justifying
+      one-line note.
