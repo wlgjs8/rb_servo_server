@@ -1,0 +1,11 @@
+build/
+logs/
+*.log
+*.tmp
+
+.omx/logs/
+.omx/state/
+.omx/reports/
+.omx/metrics.json
+
+.claude/settings.local.json
