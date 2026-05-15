@@ -556,6 +556,18 @@ bool testLatestSnapshotContainsSendTimingAndPreviousTargets() {
     return true;
 }
 
+
+bool testStatePublisherAcceptsDockerServiceHostnameEndpoint() {
+    std::string host;
+    int port = 0;
+    RB_CHECK(rb_servo::StatePublisher::parseUdpEndpointUri("udp://rb_servo_gui:50110", &host, &port));
+    RB_CHECK(host == "rb_servo_gui");
+    RB_CHECK(port == 50110);
+    RB_CHECK(!rb_servo::StatePublisher::parseUdpEndpointUri("udp://0.0.0.0:50110", &host, &port));
+    RB_CHECK(!rb_servo::StatePublisher::parseUdpEndpointUri("tcp://rb_servo_gui:50110", &host, &port));
+    return true;
+}
+
 bool testStatePublisherSerializesServoSnapshotSchema() {
     rb_servo::DualArmConfig cfg = testConfig();
     cfg.left_mount.base_pose_in_stand = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
@@ -965,6 +977,7 @@ int main() {
     if (!testSafetyFilterAccelerationClampDoesNotOvershoot()) return 1;
     if (!testRobotStateErrorRealPolicyLatchesFault()) return 1;
     if (!testLatestSnapshotContainsSendTimingAndPreviousTargets()) return 1;
+    if (!testStatePublisherAcceptsDockerServiceHostnameEndpoint()) return 1;
     if (!testStatePublisherSerializesServoSnapshotSchema()) return 1;
     if (!testStatePublisherUsesLatestSnapshotWithoutBackendReadsAndDoesNotStallLoop()) return 1;
     if (!testLoggerZeroCapacityDropsWithoutBlocking()) return 1;

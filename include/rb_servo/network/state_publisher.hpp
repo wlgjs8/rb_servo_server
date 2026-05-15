@@ -25,6 +25,8 @@ public:
     bool start();
     void stop();
 
+    static bool parseUdpEndpointUri(const std::string& endpoint, std::string* host, int* port);
+
 private:
     void threadMain();
     bool parseEndpoint(std::string* host, int* port) const;

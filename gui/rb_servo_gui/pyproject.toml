@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rb-servo-gui"
+version = "0.1.0"
+description = "Viser operator console for rb_servo_server"
+requires-python = ">=3.10"
+dependencies = ["viser>=0.2.0"]
+
+[project.scripts]
+rb-servo-gui = "rb_servo_gui.app:main"

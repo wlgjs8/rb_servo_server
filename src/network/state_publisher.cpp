@@ -1,6 +1,7 @@
 #include "rb_servo/network/state_publisher.hpp"
 
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -184,11 +186,39 @@ void StatePublisher::threadMain() {
         return;
     }
 
-    sockaddr_in dest{};
-    dest.sin_family = AF_INET;
-    dest.sin_port = htons(static_cast<uint16_t>(port));
-    if (::inet_pton(AF_INET, host.c_str(), &dest.sin_addr) != 1) {
-        std::cerr << "[ERROR] StatePublisher invalid IPv4 host: " << host << "\n";
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+
+    addrinfo* results = nullptr;
+    const std::string port_string = std::to_string(port);
+    const int gai = ::getaddrinfo(host.c_str(), port_string.c_str(), &hints, &results);
+    if (gai != 0 || results == nullptr) {
+        std::cerr << "[ERROR] StatePublisher failed to resolve host '" << host
+                  << "': " << ::gai_strerror(gai) << "\n";
+        ::close(fd);
+        running_ = false;
+        return;
+    }
+
+    std::vector<char> dest_storage;
+    const sockaddr* dest_addr = nullptr;
+    socklen_t dest_len = 0;
+    for (addrinfo* item = results; item != nullptr; item = item->ai_next) {
+        if (!item->ai_addr || item->ai_addrlen <= 0) continue;
+        dest_storage.assign(
+            reinterpret_cast<const char*>(item->ai_addr),
+            reinterpret_cast<const char*>(item->ai_addr) + item->ai_addrlen
+        );
+        dest_addr = reinterpret_cast<const sockaddr*>(dest_storage.data());
+        dest_len = static_cast<socklen_t>(item->ai_addrlen);
+        break;
+    }
+    ::freeaddrinfo(results);
+
+    if (!dest_addr || dest_len == 0) {
+        std::cerr << "[ERROR] StatePublisher found no UDP address for host '" << host << "'\n";
         ::close(fd);
         running_ = false;
         return;
@@ -211,8 +241,8 @@ void StatePublisher::threadMain() {
             payload.data(),
             payload.size(),
             0,
-            reinterpret_cast<const sockaddr*>(&dest),
-            sizeof(dest)
+            dest_addr,
+            dest_len
         );
         if (sent < 0 && !send_warned) {
             std::cerr << "[WARN] StatePublisher send failed: " << std::strerror(errno) << "\n";
@@ -224,35 +254,41 @@ void StatePublisher::threadMain() {
     ::close(fd);
 }
 
-bool StatePublisher::parseEndpoint(std::string* host, int* port) const {
-    const std::string& endpoint = config_.network.state_pub_bind;
+bool StatePublisher::parseUdpEndpointUri(const std::string& endpoint, std::string* host, int* port) {
     constexpr const char* prefix = "udp://";
     if (endpoint.rfind(prefix, 0) != 0) return false;
 
-    std::string rest = endpoint.substr(std::strlen(prefix));
+    const std::string rest = endpoint.substr(std::strlen(prefix));
     if (rest.empty()) return false;
-    if (rest == "localhost") rest = "127.0.0.1";
 
     const auto colon = rest.rfind(':');
     if (colon == std::string::npos || colon + 1 >= rest.size()) return false;
 
-    std::string parsed_host = rest.substr(0, colon);
-    if (parsed_host == "localhost") parsed_host = "127.0.0.1";
+    const std::string parsed_host = rest.substr(0, colon);
     if (parsed_host.empty() || parsed_host == "0.0.0.0") return false;
 
     int parsed_port = 0;
+    std::string port_tail;
     try {
-        parsed_port = std::stoi(rest.substr(colon + 1));
+        size_t consumed = 0;
+        parsed_port = std::stoi(rest.substr(colon + 1), &consumed);
+        port_tail = rest.substr(colon + 1 + consumed);
     } catch (const std::exception&) {
         return false;
     }
+    if (!port_tail.empty()) return false;
     if (parsed_port <= 0 || parsed_port > 65535) return false;
-    in_addr addr{};
-    if (::inet_pton(AF_INET, parsed_host.c_str(), &addr) != 1) return false;
 
-    if (host) *host = parsed_host;
+    // Hostname-capable by design: Docker Compose service names such as
+    // rb_servo_gui are resolved in threadMain with getaddrinfo(). Static
+    // container IPs are not required for cross-container UDP state delivery.
+    if (host) *host = parsed_host == "localhost" ? "127.0.0.1" : parsed_host;
     if (port) *port = parsed_port;
     return true;
+}
+
+bool StatePublisher::parseEndpoint(std::string* host, int* port) const {
+    return parseUdpEndpointUri(config_.network.state_pub_bind, host, port);
 }
 
 }  // namespace rb_servo

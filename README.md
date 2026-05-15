@@ -119,3 +119,14 @@ The C++ receive timestamp is used for timeout checks.
 ## Force-control status
 
 Force control is present as a design scaffold only. It is disabled by default and not connected to the joint-only control path. See `docs/force_control.md`.
+
+## Docker + viser operator GUI
+
+Mock-mode browser operation is available through the Docker Compose stack:
+
+```bash
+docker compose build rb_servo_server rb_servo_gui
+docker compose up rb_servo_gui rb_servo_server
+```
+
+Open <http://localhost:8080>. The GUI receives UDP state snapshots and sends only validated UDP JSON commands. Real motion is disabled, simulation is No-Go until rbpodo/rbsim readiness passes, TCP jog is explicitly unavailable, and the GUI does not mount the raw Docker socket. See `docs/gui_operator_console.md`.

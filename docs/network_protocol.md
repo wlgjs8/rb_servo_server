@@ -20,7 +20,7 @@ In real mode, exposed command or state publisher binds such as `udp://0.0.0.0:50
 it does not read robot backends. The high-rate servo loop remains the sole owner
 of backend `readState()` calls.
 
-The current state stream is UDP JSON to `network.state_pub_bind` at 20 Hz. The
+The current state stream is UDP JSON to `network.state_pub_bind` at 20 Hz. `StatePublisher` accepts hostname endpoints such as `udp://rb_servo_gui:50110` for Docker Compose DNS, so static container IPs are not required. The
 payload includes:
 
 - `schema_version`, `tick`, `host_time_ns`, `loop_start_time_ns`, `loop_end_time_ns`
