@@ -319,8 +319,14 @@ void DualArmServoLoop::loopMain() {
             latest_snapshot_.loop_end_time_ns = loop_end;
             latest_snapshot_.left_state = left_state;
             latest_snapshot_.right_state = right_state;
+            latest_snapshot_.command = command;
+            latest_snapshot_.left_sent_q_deg = attempted_target.left_q_target_deg;
+            latest_snapshot_.right_sent_q_deg = attempted_target.right_q_target_deg;
             latest_snapshot_.left_prev_sent_q_deg = left_prev_sent_q_deg_;
             latest_snapshot_.right_prev_sent_q_deg = right_prev_sent_q_deg_;
+            latest_snapshot_.period_ms = sample.period_ms;
+            latest_snapshot_.jitter_ms = sample.jitter_ms;
+            latest_snapshot_.filter_dt_ms = sample.filter_dt_ms;
             latest_snapshot_.safety_verdict = safety_verdict;
             latest_snapshot_.motion_state = sample.motion_state;
             latest_snapshot_.fault_latched = sample.fault_latched;
@@ -335,6 +341,7 @@ void DualArmServoLoop::loopMain() {
             latest_snapshot_.send_skew_us = sample.send_skew_us;
             latest_snapshot_.left_send_duration_us = sample.left_send_duration_us;
             latest_snapshot_.right_send_duration_us = sample.right_send_duration_us;
+            latest_snapshot_.logger_dropped_samples = logger_ ? logger_->droppedSamples() : 0;
         }
 
         if (logger_) {

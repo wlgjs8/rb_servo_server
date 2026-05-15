@@ -28,7 +28,9 @@ Default mock target:
     - fault_latch for real tracking error
     - robot state error can latch fault
 14. send left/right target through IRobotBackend and record send timestamps
-15. publish latest `ServoSnapshot` for debug/publisher/test readers
+15. publish latest `ServoSnapshot` for debug/publisher/test readers, including
+    command seq/modes, sent targets, period/jitter/filter dt, send timing, and
+    logger drop count
 16. push ServoSample to async logger
 17. sleep_until(next_tick)
 ```
@@ -50,7 +52,7 @@ These are used to decide whether 100–200 Hz is stable enough before trying rbs
 
 ## Snapshot ownership
 
-`DualArmServoLoop` owns robot state reads. Other components must observe servo state through the latest `ServoSnapshot`, not by reading robot backends directly. This keeps the mock plant from advancing twice when a future state publisher is enabled and gives tests/debug tools one thread-safe read surface for motion state, fault state, previous sent targets, and send timing.
+`DualArmServoLoop` owns robot state reads. Other components must observe servo state through the latest `ServoSnapshot`, not by reading robot backends directly. This keeps the mock plant from advancing twice when the state publisher is enabled and gives tests/debug tools one thread-safe read surface for command seq/modes, motion state, fault state, actual/sent/previous-sent targets, timing, logger health, and send timing.
 
 ## Hold behavior
 

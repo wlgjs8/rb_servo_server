@@ -21,7 +21,10 @@
 #include "rb_servo/core/clock.hpp"
 #include "rb_servo/logging/servo_logger.hpp"
 #include "rb_servo/network/command_server.hpp"
+#include "rb_servo/network/state_publisher.hpp"
 #include "rb_servo/robot/i_robot_backend.hpp"
+
+#include <nlohmann/json.hpp>
 
 namespace {
 
@@ -48,6 +51,15 @@ bool sameJointArray(const rb_servo::JointArray& a, const rb_servo::JointArray& b
     return true;
 }
 
+bool jsonArrayHasSixFinite(const nlohmann::json& value) {
+    if (!value.is_array() || value.size() != static_cast<size_t>(rb_servo::kDof)) return false;
+    for (const auto& item : value) {
+        if (!item.is_number()) return false;
+        if (!std::isfinite(item.get<double>())) return false;
+    }
+    return true;
+}
+
 class TestBackend final : public rb_servo::IRobotBackend {
 public:
     TestBackend(rb_servo::ArmId arm_id, rb_servo::JointArray initial, bool fail_send)
@@ -64,6 +76,7 @@ public:
     }
 
     bool readState(rb_servo::RobotState& out_state) override {
+        ++read_count_;
         if (!read_ok_) return false;
         out_state.arm_id = arm_id_;
         out_state.host_time_ns = rb_servo::nowSteadyNs();
@@ -95,6 +108,7 @@ public:
     void setReadOk(bool ok) { read_ok_ = ok; }
     void setConnected(bool connected) { connected_ = connected; }
     void setHasError(bool has_error) { has_error_ = has_error; }
+    int readCount() const { return read_count_; }
 
 private:
     rb_servo::ArmId arm_id_;
@@ -106,6 +120,7 @@ private:
     bool has_error_ = false;
     bool connected_ = false;
     bool initialized_ = false;
+    int read_count_ = 0;
 };
 
 rb_servo::DualArmConfig testConfig() {
@@ -541,6 +556,180 @@ bool testLatestSnapshotContainsSendTimingAndPreviousTargets() {
     return true;
 }
 
+bool testStatePublisherSerializesServoSnapshotSchema() {
+    rb_servo::DualArmConfig cfg = testConfig();
+    cfg.left_mount.base_pose_in_stand = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6};
+    cfg.right_mount.base_pose_in_stand = {-0.1, -0.2, 0.3, -0.4, -0.5, 0.6};
+
+    rb_servo::ServoSnapshot snapshot;
+    snapshot.tick = 123;
+    snapshot.loop_start_time_ns = 1'000;
+    snapshot.loop_end_time_ns = 2'000;
+    snapshot.period_ms = 5.0;
+    snapshot.jitter_ms = 0.1;
+    snapshot.filter_dt_ms = 5.0;
+    snapshot.command.seq = 42;
+    snapshot.command.left.mode = rb_servo::ControlMode::JointTarget;
+    snapshot.command.right.mode = rb_servo::ControlMode::Hold;
+    snapshot.left_state.arm_id = rb_servo::ArmId::Left;
+    snapshot.right_state.arm_id = rb_servo::ArmId::Right;
+    snapshot.left_state.host_time_ns = 11'000;
+    snapshot.right_state.host_time_ns = 12'000;
+    snapshot.left_state.robot_time_ns = 21'000;
+    snapshot.right_state.robot_time_ns = 22'000;
+    snapshot.left_state.q_actual_deg = joints(1.0);
+    snapshot.right_state.q_actual_deg = joints(2.0);
+    snapshot.left_state.has_valid_joint_state = true;
+    snapshot.right_state.has_valid_joint_state = true;
+    snapshot.left_state.connection_state = rb_servo::RobotConnectionState::Connected;
+    snapshot.right_state.connection_state = rb_servo::RobotConnectionState::Connected;
+    snapshot.left_sent_q_deg = joints(3.0);
+    snapshot.right_sent_q_deg = joints(4.0);
+    snapshot.left_prev_sent_q_deg = joints(5.0);
+    snapshot.right_prev_sent_q_deg = joints(6.0);
+    snapshot.left_send_ok = true;
+    snapshot.right_send_ok = true;
+    snapshot.left_send_start_ns = 10;
+    snapshot.left_send_end_ns = 20;
+    snapshot.right_send_start_ns = 30;
+    snapshot.right_send_end_ns = 40;
+    snapshot.send_skew_us = 20.0;
+    snapshot.left_send_duration_us = 10.0;
+    snapshot.right_send_duration_us = 10.0;
+    snapshot.safety_verdict = rb_servo::SafetyVerdict::Ok;
+    snapshot.motion_state = rb_servo::ServerMotionState::Running;
+    snapshot.fault_latched = false;
+    snapshot.latched_fault_reason = rb_servo::SafetyVerdict::Ok;
+    snapshot.fault_reason = "";
+    snapshot.logger_dropped_samples = 0;
+
+    rb_servo::StatePublisher publisher(cfg);
+    const nlohmann::json json = nlohmann::json::parse(publisher.serializeSnapshot(snapshot));
+
+    const char* top_keys[] = {
+        "schema_version", "tick", "host_time_ns", "loop_start_time_ns", "loop_end_time_ns",
+        "period_ms", "jitter_ms", "filter_dt_ms", "command_seq", "left", "right",
+        "send_skew_us", "safety_verdict", "motion_state", "fault_latched",
+        "latched_fault_reason", "fault_reason", "logger_dropped_samples", "logger_health",
+        "mount_transform_deferred", "mounts", "tcp_fields_deferred"
+    };
+    for (const char* key : top_keys) {
+        RB_CHECK(json.contains(key));
+    }
+    const char* arm_keys[] = {
+        "mode", "q_actual_deg", "q_sent_deg", "q_previous_sent_deg", "send_ok",
+        "send_start_ns", "send_end_ns", "send_duration_us", "has_valid_joint_state",
+        "connection_state", "robot_time_ns", "host_time_ns", "error_code",
+        "tcp_stand", "tcp_base", "tcp_deferred"
+    };
+    for (const char* arm_name : {"left", "right"}) {
+        for (const char* key : arm_keys) {
+            RB_CHECK(json.at(arm_name).contains(key));
+        }
+    }
+
+    RB_CHECK(json.at("schema_version").get<int>() == 1);
+    RB_CHECK(json.at("tick").get<uint64_t>() == 123);
+    RB_CHECK(json.at("host_time_ns").get<uint64_t>() == 2'000);
+    RB_CHECK(json.at("loop_start_time_ns").get<uint64_t>() == 1'000);
+    RB_CHECK(json.at("loop_end_time_ns").get<uint64_t>() == 2'000);
+    RB_CHECK(json.at("period_ms").get<double>() == 5.0);
+    RB_CHECK(json.at("jitter_ms").get<double>() == 0.1);
+    RB_CHECK(json.at("filter_dt_ms").get<double>() == 5.0);
+    RB_CHECK(json.at("command_seq").get<uint64_t>() == 42);
+    RB_CHECK(json.at("left").at("mode").get<std::string>() == "JointTarget");
+    RB_CHECK(json.at("right").at("mode").get<std::string>() == "Hold");
+    RB_CHECK(jsonArrayHasSixFinite(json.at("left").at("q_actual_deg")));
+    RB_CHECK(jsonArrayHasSixFinite(json.at("right").at("q_actual_deg")));
+    RB_CHECK(jsonArrayHasSixFinite(json.at("left").at("q_sent_deg")));
+    RB_CHECK(jsonArrayHasSixFinite(json.at("right").at("q_sent_deg")));
+    RB_CHECK(jsonArrayHasSixFinite(json.at("left").at("q_previous_sent_deg")));
+    RB_CHECK(jsonArrayHasSixFinite(json.at("right").at("q_previous_sent_deg")));
+    RB_CHECK(json.at("left").at("send_ok").get<bool>());
+    RB_CHECK(json.at("right").at("send_ok").get<bool>());
+    RB_CHECK(json.at("left").at("send_start_ns").get<uint64_t>() == 10);
+    RB_CHECK(json.at("left").at("send_end_ns").get<uint64_t>() == 20);
+    RB_CHECK(json.at("right").at("send_start_ns").get<uint64_t>() == 30);
+    RB_CHECK(json.at("right").at("send_end_ns").get<uint64_t>() == 40);
+    RB_CHECK(json.at("left").at("host_time_ns").get<uint64_t>() == 11'000);
+    RB_CHECK(json.at("right").at("robot_time_ns").get<uint64_t>() == 22'000);
+    RB_CHECK(json.at("send_skew_us").get<double>() == 20.0);
+    RB_CHECK(json.at("left").at("send_duration_us").get<double>() == 10.0);
+    RB_CHECK(json.at("right").at("send_duration_us").get<double>() == 10.0);
+    RB_CHECK(json.at("safety_verdict").get<std::string>() == "Ok");
+    RB_CHECK(json.at("motion_state").get<std::string>() == "Running");
+    RB_CHECK(!json.at("fault_latched").get<bool>());
+    RB_CHECK(json.at("latched_fault_reason").get<std::string>() == "Ok");
+    RB_CHECK(json.at("fault_reason").get<std::string>().empty());
+    RB_CHECK(json.at("logger_dropped_samples").get<uint64_t>() == 0);
+    RB_CHECK(json.at("logger_health").at("ok").get<bool>());
+    RB_CHECK(!json.at("mount_transform_deferred").get<bool>());
+    RB_CHECK(json.at("mounts").at("left").at("frame").get<std::string>() == "stand");
+    RB_CHECK(json.at("mounts").at("right").at("base_pose_in_stand").at("x").get<double>() == -0.1);
+    RB_CHECK(json.at("tcp_fields_deferred").get<bool>());
+    RB_CHECK(json.at("left").at("tcp_stand").is_null());
+    RB_CHECK(json.at("left").at("tcp_base").is_null());
+    RB_CHECK(json.at("left").at("tcp_deferred").get<bool>());
+    RB_CHECK(json.at("right").at("tcp_stand").is_null());
+    RB_CHECK(json.at("right").at("tcp_base").is_null());
+    RB_CHECK(json.at("right").at("tcp_deferred").get<bool>());
+    return true;
+}
+
+bool testStatePublisherUsesLatestSnapshotWithoutBackendReadsAndDoesNotStallLoop() {
+    rb_servo::DualArmConfig cfg = testConfig();
+    const int port = reserveLoopbackUdpPort();
+    RB_CHECK(port > 0);
+    cfg.network.state_pub_bind = "udp://127.0.0.1:" + std::to_string(port);
+    cfg.servo.rate_hz = 200;
+    cfg.servo.enable_realtime_priority = false;
+
+    int provider_calls = 0;
+    const rb_servo::JointArray initial = joints(0.0);
+    auto left = std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false);
+    auto right = std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false);
+    TestBackend* left_raw = left.get();
+    TestBackend* right_raw = right.get();
+
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmServoLoop loop(
+        std::move(left),
+        std::move(right),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    sleepTicks();
+    const uint64_t tick_before = loop.latestSnapshot().tick;
+
+    rb_servo::StatePublisher publisher(cfg, [&loop, &provider_calls]() {
+        ++provider_calls;
+        return loop.latestSnapshot();
+    });
+
+    RB_CHECK(publisher.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    publisher.stop();
+    const uint64_t tick_after = loop.latestSnapshot().tick;
+    RB_CHECK(tick_after > tick_before + 5);
+    RB_CHECK(provider_calls > 0);
+
+    loop.stop();
+    const int left_reads_after_loop_stop = left_raw->readCount();
+    const int right_reads_after_loop_stop = right_raw->readCount();
+
+    provider_calls = 0;
+    RB_CHECK(publisher.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    publisher.stop();
+    RB_CHECK(provider_calls > 0);
+    RB_CHECK(left_raw->readCount() == left_reads_after_loop_stop);
+    RB_CHECK(right_raw->readCount() == right_reads_after_loop_stop);
+    return true;
+}
+
 bool testLoggerZeroCapacityDropsWithoutBlocking() {
     rb_servo::LoggingConfig cfg;
     cfg.enable = true;
@@ -776,6 +965,8 @@ int main() {
     if (!testSafetyFilterAccelerationClampDoesNotOvershoot()) return 1;
     if (!testRobotStateErrorRealPolicyLatchesFault()) return 1;
     if (!testLatestSnapshotContainsSendTimingAndPreviousTargets()) return 1;
+    if (!testStatePublisherSerializesServoSnapshotSchema()) return 1;
+    if (!testStatePublisherUsesLatestSnapshotWithoutBackendReadsAndDoesNotStallLoop()) return 1;
     if (!testLoggerZeroCapacityDropsWithoutBlocking()) return 1;
     if (!testInvalidStartupRobotStateFailsStart()) return 1;
     if (!testEmergencyWinsAndResetDoesNotRun()) return 1;

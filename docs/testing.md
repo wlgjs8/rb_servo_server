@@ -28,6 +28,18 @@ The CSV should also contain send timing columns:
 
 Use these columns as measurement evidence before changing the sender architecture or attempting rbsim/real bring-up.
 
+Full milestone budget checks use the stdlib analyzer:
+
+```bash
+python3 tools/analyze_servo_log.py --profile mock200 logs/servo_log.csv
+python3 tools/analyze_servo_log.py --profile rbsim100 logs/servo_log.csv
+```
+
+`mock200` expects a 60 s, 200 Hz run. `rbsim100` expects a 30 s, 100 Hz run.
+The analyzer fails closed on missing columns, dropped samples, send failures, bad
+duration/rate/jitter/skew/send-duration budgets, and mock tracking error above
+2 deg.
+
 Real-mode guard smoke test:
 
 ```bash

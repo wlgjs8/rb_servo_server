@@ -226,8 +226,16 @@ struct ServoSnapshot {
     RobotState left_state;
     RobotState right_state;
 
+    DualArmCommand command;
+
+    JointArray left_sent_q_deg{};
+    JointArray right_sent_q_deg{};
     JointArray left_prev_sent_q_deg{};
     JointArray right_prev_sent_q_deg{};
+
+    double period_ms = 0.0;
+    double jitter_ms = 0.0;
+    double filter_dt_ms = 0.0;
 
     SafetyVerdict safety_verdict = SafetyVerdict::Ok;
     ServerMotionState motion_state = ServerMotionState::Disconnected;
@@ -244,6 +252,8 @@ struct ServoSnapshot {
     double send_skew_us = 0.0;
     double left_send_duration_us = 0.0;
     double right_send_duration_us = 0.0;
+
+    uint64_t logger_dropped_samples = 0;
 };
 
 std::string toString(ArmId arm_id);

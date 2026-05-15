@@ -1,6 +1,8 @@
 # Network Protocol
 
-`rb_servo_server` currently uses UDP JSON for the Python → C++ command channel.
+`rb_servo_server` currently uses UDP JSON for the Python → C++ command channel and
+a lower-rate UDP JSON state stream for observability/dataset/camera-recorder
+consumers.
 
 Default:
 
@@ -11,6 +13,29 @@ network:
 ```
 
 In real mode, exposed command or state publisher binds such as `udp://0.0.0.0:50010` or `tcp://0.0.0.0:50110` are rejected unless `RB_ALLOW_NETWORK_EXPOSURE=1` is set. Unknown bind formats fail closed in real mode.
+
+## State publisher
+
+`StatePublisher` publishes snapshots from `DualArmServoLoop::latestSnapshot()`;
+it does not read robot backends. The high-rate servo loop remains the sole owner
+of backend `readState()` calls.
+
+The current state stream is UDP JSON to `network.state_pub_bind` at 20 Hz. The
+payload includes:
+
+- `schema_version`, `tick`, `host_time_ns`, `loop_start_time_ns`, `loop_end_time_ns`
+- `period_ms`, `jitter_ms`, `filter_dt_ms`, `command_seq`
+- `left` / `right` objects with `mode`, `q_actual_deg`, `q_sent_deg`,
+  `q_previous_sent_deg`, send timestamps/status/duration, connection/error fields
+- `send_skew_us`, `safety_verdict`, `motion_state`, `fault_latched`,
+  `latched_fault_reason`, `fault_reason`
+- `logger_dropped_samples` / `logger_health`
+- stand-frame mount transforms from config
+- nullable/deferred TCP fields (`tcp_fields_deferred: true`) until Cartesian FK/IK
+  is implemented
+
+Consumers should join this stream with external RealSense logs by host/loop
+timestamps. RealSense capture stays outside `rb_servo_server`.
 
 ## Important timing rule
 

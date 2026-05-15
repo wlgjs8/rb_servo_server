@@ -9,6 +9,7 @@
 #include "rb_servo/control/dual_arm_servo_loop.hpp"
 #include "rb_servo/logging/servo_logger.hpp"
 #include "rb_servo/network/command_server.hpp"
+#include "rb_servo/network/state_publisher.hpp"
 #include "rb_servo/robot/backend_factory.hpp"
 
 namespace {
@@ -54,6 +55,12 @@ int main(int argc, char** argv) {
             &command_buffer,
             &logger
         );
+        rb_servo::StatePublisher state_publisher(
+            config,
+            [&servo_loop]() {
+                return servo_loop.latestSnapshot();
+            }
+        );
 
         if (!logger.start()) {
             return 1;
@@ -69,12 +76,20 @@ int main(int argc, char** argv) {
             logger.stop();
             return 1;
         }
+        if (!state_publisher.start()) {
+            std::cerr << "[ERROR] failed to start state publisher\n";
+            command_server.stop();
+            servo_loop.stop();
+            logger.stop();
+            return 1;
+        }
 
         std::cout << "rb_servo_server started with config: " << config_path << "\n";
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
+        state_publisher.stop();
         command_server.stop();
         servo_loop.stop();
         logger.stop();
