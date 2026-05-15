@@ -27,9 +27,10 @@ Default mock target:
     - snap_to_actual for mock/rbsim tracking error
     - fault_latch for real tracking error
     - robot state error can latch fault
-14. send left/right target through IRobotBackend
-15. push ServoSample to async logger
-16. sleep_until(next_tick)
+14. send left/right target through IRobotBackend and record send timestamps
+15. publish latest `ServoSnapshot` for debug/publisher/test readers
+16. push ServoSample to async logger
+17. sleep_until(next_tick)
 ```
 
 ## Timing columns
@@ -42,8 +43,14 @@ The logger records:
 - `loop_start_time_ns`
 - `loop_end_time_ns`
 - `logger_dropped_samples`: total samples dropped by the bounded logging queue
+- `left_send_start_ns`, `left_send_end_ns`, `right_send_start_ns`, `right_send_end_ns`
+- `send_skew_us`, `left_send_duration_us`, `right_send_duration_us`
 
 These are used to decide whether 100–200 Hz is stable enough before trying rbsim/real hardware.
+
+## Snapshot ownership
+
+`DualArmServoLoop` owns robot state reads. Other components must observe servo state through the latest `ServoSnapshot`, not by reading robot backends directly. This keeps the mock plant from advancing twice when a future state publisher is enabled and gives tests/debug tools one thread-safe read surface for motion state, fault state, previous sent targets, and send timing.
 
 ## Hold behavior
 

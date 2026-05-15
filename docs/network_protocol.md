@@ -7,15 +7,18 @@ Default:
 ```yaml
 network:
   command_bind: "udp://127.0.0.1:50010"
+  state_pub_bind: "udp://127.0.0.1:50110"
 ```
 
-In real mode, `udp://0.0.0.0:50010` is rejected unless `RB_ALLOW_NETWORK_EXPOSURE=1` is set.
+In real mode, exposed command or state publisher binds such as `udp://0.0.0.0:50010` or `tcp://0.0.0.0:50110` are rejected unless `RB_ALLOW_NETWORK_EXPOSURE=1` is set. Unknown bind formats fail closed in real mode.
 
 ## Important timing rule
 
 The authoritative timestamp for timeout/staleness is the C++ receive time.
 
 Python may send `host_time_ns` for debugging, but `CommandServer` overwrites the command's internal timestamp with `nowSteadyNs()` at packet receive time.
+
+`coupled_timeout` is retained for protocol compatibility, but v3 treats dual-arm commands as coupled: the earliest per-arm timeout makes both arms Hold. Future per-arm command streams should use separate command channels or a binary protocol with explicit per-arm timestamps.
 
 ## Minimal Hold command
 

@@ -19,6 +19,15 @@ The sine tool sends `ArmMotion` before its first `JointTarget` and waits briefly
 
 The smoke is meaningful only if `logs/servo_log.csv` shows `JointTarget`, `Running`, and non-trivial sent joint motion. After `EmergencyStop` and `ResetFault`, send `ArmMotion` again before motion targets.
 
+The CSV should also contain send timing columns:
+
+- `left_send_start_ns`, `left_send_end_ns`
+- `right_send_start_ns`, `right_send_end_ns`
+- `send_skew_us`
+- `left_send_duration_us`, `right_send_duration_us`
+
+Use these columns as measurement evidence before changing the sender architecture or attempting rbsim/real bring-up.
+
 Real-mode guard smoke test:
 
 ```bash

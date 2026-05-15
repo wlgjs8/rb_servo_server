@@ -11,6 +11,7 @@ This plan turns `TODO1.md`, `TODO2.md`, and `TODO3.md` into an execution roadmap
 Current status:
 
 - `main` contains the verified safety patch from `real-readiness-safety-patch`.
+- M1 mock safety hardening closeout is implemented in the follow-up branch: `ServoSnapshot`, send timing columns, logger zero-capacity drop handling, and additional safety tests.
 - Mock safety loop is Go for continued hardening.
 - rbsim/real robot motion remains No-Go until rbpodo state/read/send paths are implemented and bring-up evidence exists.
 - TODO2's ArmMotion bootstrap race is fixed structurally by a lifecycle-command queue in `CommandBuffer`, with a tool-side settle delay as an extra guard.

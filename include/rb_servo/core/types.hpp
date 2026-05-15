@@ -200,6 +200,13 @@ struct ServoSample {
 
     bool left_send_ok = false;
     bool right_send_ok = false;
+    uint64_t left_send_start_ns = 0;
+    uint64_t left_send_end_ns = 0;
+    uint64_t right_send_start_ns = 0;
+    uint64_t right_send_end_ns = 0;
+    double send_skew_us = 0.0;
+    double left_send_duration_us = 0.0;
+    double right_send_duration_us = 0.0;
 
     double period_ms = 0.0;
     double jitter_ms = 0.0;
@@ -209,6 +216,34 @@ struct ServoSample {
     ServerMotionState motion_state = ServerMotionState::Disconnected;
     bool fault_latched = false;
     std::string fault_reason;
+};
+
+struct ServoSnapshot {
+    uint64_t tick = 0;
+    uint64_t loop_start_time_ns = 0;
+    uint64_t loop_end_time_ns = 0;
+
+    RobotState left_state;
+    RobotState right_state;
+
+    JointArray left_prev_sent_q_deg{};
+    JointArray right_prev_sent_q_deg{};
+
+    SafetyVerdict safety_verdict = SafetyVerdict::Ok;
+    ServerMotionState motion_state = ServerMotionState::Disconnected;
+    bool fault_latched = false;
+    SafetyVerdict latched_fault_reason = SafetyVerdict::Ok;
+    std::string fault_reason;
+
+    bool left_send_ok = false;
+    bool right_send_ok = false;
+    uint64_t left_send_start_ns = 0;
+    uint64_t left_send_end_ns = 0;
+    uint64_t right_send_start_ns = 0;
+    uint64_t right_send_end_ns = 0;
+    double send_skew_us = 0.0;
+    double left_send_duration_us = 0.0;
+    double right_send_duration_us = 0.0;
 };
 
 std::string toString(ArmId arm_id);

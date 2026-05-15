@@ -3,9 +3,11 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <string>
@@ -15,7 +17,9 @@
 #include "rb_servo/config/config.hpp"
 #include "rb_servo/control/command_buffer.hpp"
 #include "rb_servo/control/dual_arm_servo_loop.hpp"
+#include "rb_servo/control/safety_filter.hpp"
 #include "rb_servo/core/clock.hpp"
+#include "rb_servo/logging/servo_logger.hpp"
 #include "rb_servo/network/command_server.hpp"
 #include "rb_servo/robot/i_robot_backend.hpp"
 
@@ -60,6 +64,7 @@ public:
     }
 
     bool readState(rb_servo::RobotState& out_state) override {
+        if (!read_ok_) return false;
         out_state.arm_id = arm_id_;
         out_state.host_time_ns = rb_servo::nowSteadyNs();
         out_state.q_actual_deg = q_actual_;
@@ -69,7 +74,7 @@ public:
             ? rb_servo::RobotConnectionState::Connected
             : rb_servo::RobotConnectionState::Disconnected;
         out_state.servo_enabled = initialized_;
-        out_state.has_error = false;
+        out_state.has_error = has_error_;
         return true;
     }
 
@@ -87,6 +92,9 @@ public:
     std::string name() const override { return "test"; }
 
     void setValidJointState(bool valid) { valid_joint_state_ = valid; }
+    void setReadOk(bool ok) { read_ok_ = ok; }
+    void setConnected(bool connected) { connected_ = connected; }
+    void setHasError(bool has_error) { has_error_ = has_error; }
 
 private:
     rb_servo::ArmId arm_id_;
@@ -94,6 +102,8 @@ private:
     rb_servo::JointArray q_target_{};
     bool fail_send_ = false;
     bool valid_joint_state_ = true;
+    bool read_ok_ = true;
+    bool has_error_ = false;
     bool connected_ = false;
     bool initialized_ = false;
 };
@@ -214,6 +224,25 @@ bool testCommandBufferInvalidTimeoutHolds() {
     return true;
 }
 
+bool testCoupledTimeoutUsesEarliestArmTimeout() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.host_time_ns = rb_servo::nowSteadyNs();
+    target.left.timeout_sec = 0.2;
+    target.right.timeout_sec = 0.05;
+    target.coupled_timeout = false;
+    target.left.q_target_deg = joints(4.0);
+    target.right.q_target_deg = joints(4.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+    buffer.setCommand(target);
+
+    rb_servo::DualArmCommand latest = buffer.latestOrHold(target.host_time_ns + 100'000'000ULL);
+    RB_CHECK(latest.left.mode == rb_servo::ControlMode::Hold);
+    RB_CHECK(latest.right.mode == rb_servo::ControlMode::Hold);
+    return true;
+}
+
 bool testLifecycleCommandSurvivesMotionOverwrite() {
     rb_servo::CommandBuffer buffer;
     rb_servo::DualArmCommand arm = command(rb_servo::ControlMode::ArmMotion);
@@ -238,6 +267,42 @@ bool testLifecycleCommandSurvivesMotionOverwrite() {
     RB_CHECK(second.left.mode == rb_servo::ControlMode::JointTarget);
     RB_CHECK(second.right.mode == rb_servo::ControlMode::JointTarget);
     RB_CHECK(sameJointArray(second.left.q_target_deg, joints(3.0)));
+    return true;
+}
+
+bool testOversizedUdpPacketDoesNotUpdateCommandBuffer() {
+    const int port = reserveLoopbackUdpPort();
+    RB_CHECK(port > 0);
+
+    rb_servo::NetworkConfig network;
+    network.command_bind = "udp://127.0.0.1:" + std::to_string(port);
+    rb_servo::CommandBuffer buffer;
+    rb_servo::CommandServer server(network, &buffer);
+    RB_CHECK(server.start());
+
+    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    RB_CHECK(fd >= 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    RB_CHECK(::inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) == 1);
+    const std::string oversized(9000, 'x');
+    const ssize_t sent = ::sendto(
+        fd,
+        oversized.data(),
+        oversized.size(),
+        0,
+        reinterpret_cast<sockaddr*>(&addr),
+        sizeof(addr)
+    );
+    ::close(fd);
+    RB_CHECK(sent == static_cast<ssize_t>(oversized.size()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    const rb_servo::DualArmCommand latest = buffer.latestOrHold(rb_servo::nowSteadyNs());
+    server.stop();
+    RB_CHECK(latest.left.mode == rb_servo::ControlMode::Hold);
+    RB_CHECK(latest.right.mode == rb_servo::ControlMode::Hold);
     return true;
 }
 
@@ -342,6 +407,154 @@ bool testRealModeTcpStatePublisherExposureRequiresOverride() {
     }
 
     RB_CHECK(rejected);
+    return true;
+}
+
+bool testSafetyFilterVelocityClampMaxStep() {
+    rb_servo::SafetyConfig cfg;
+    cfg.q_min_deg = joints(-180.0);
+    cfg.q_max_deg = joints(180.0);
+    cfg.dq_max_deg_s = joints(10.0);
+    cfg.ddq_max_deg_s2 = joints(100000.0);
+    cfg.max_tracking_error_deg = 1000.0;
+    rb_servo::SafetyFilter filter(cfg);
+
+    rb_servo::RobotState state;
+    state.connection_state = rb_servo::RobotConnectionState::Connected;
+    state.has_valid_joint_state = true;
+    state.q_actual_deg = joints(0.0);
+
+    const rb_servo::SafetyCheckResult result = filter.filterJointTarget(
+        joints(100.0),
+        joints(0.0),
+        joints(0.0),
+        state,
+        0.01
+    );
+
+    RB_CHECK(result.ok);
+    for (double q : result.filtered_q_deg) {
+        RB_CHECK(q <= 0.1 + kEpsilon);
+        RB_CHECK(q >= -kEpsilon);
+    }
+    return true;
+}
+
+bool testSafetyFilterAccelerationClampDoesNotOvershoot() {
+    rb_servo::SafetyConfig cfg;
+    cfg.q_min_deg = joints(-180.0);
+    cfg.q_max_deg = joints(180.0);
+    cfg.dq_max_deg_s = joints(1000.0);
+    cfg.ddq_max_deg_s2 = joints(100.0);
+    cfg.max_tracking_error_deg = 1000.0;
+    rb_servo::SafetyFilter filter(cfg);
+
+    rb_servo::RobotState state;
+    state.connection_state = rb_servo::RobotConnectionState::Connected;
+    state.has_valid_joint_state = true;
+    state.q_actual_deg = joints(0.0);
+
+    const rb_servo::SafetyCheckResult result = filter.filterJointTarget(
+        joints(0.005),
+        joints(0.0),
+        joints(0.0),
+        state,
+        0.01
+    );
+
+    RB_CHECK(result.ok);
+    for (double q : result.filtered_q_deg) {
+        RB_CHECK(q <= 0.005 + kEpsilon);
+        RB_CHECK(q >= -kEpsilon);
+    }
+    return true;
+}
+
+bool testRobotStateErrorRealPolicyLatchesFault() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    cfg.left_robot.run_mode = rb_servo::RunMode::Real;
+    cfg.safety.latch_fault_on_robot_state_error = false;
+    const rb_servo::JointArray initial = joints(0.0);
+    auto left = std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false);
+    TestBackend* left_raw = left.get();
+    rb_servo::DualArmServoLoop loop(
+        std::move(left),
+        std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    left_raw->setHasError(true);
+    sleepTicks();
+    const rb_servo::ServoSnapshot snapshot = loop.latestSnapshot();
+    loop.stop();
+    RB_CHECK(snapshot.fault_latched);
+    RB_CHECK(snapshot.latched_fault_reason == rb_servo::SafetyVerdict::RobotStateError);
+    RB_CHECK(snapshot.motion_state == rb_servo::ServerMotionState::FaultLatched);
+    return true;
+}
+
+bool testLatestSnapshotContainsSendTimingAndPreviousTargets() {
+    rb_servo::CommandBuffer buffer;
+    rb_servo::DualArmConfig cfg = testConfig();
+    cfg.safety.dq_max_deg_s = joints(10000.0);
+    cfg.safety.ddq_max_deg_s2 = joints(100000.0);
+    const rb_servo::JointArray initial = joints(0.0);
+    rb_servo::DualArmServoLoop loop(
+        std::make_unique<TestBackend>(rb_servo::ArmId::Left, initial, false),
+        std::make_unique<TestBackend>(rb_servo::ArmId::Right, initial, false),
+        cfg,
+        &buffer,
+        nullptr
+    );
+
+    RB_CHECK(loop.start());
+    buffer.setCommand(command(rb_servo::ControlMode::ArmMotion));
+    sleepTicks();
+
+    rb_servo::DualArmCommand target = command(rb_servo::ControlMode::JointTarget);
+    target.left.q_target_deg = joints(2.0);
+    target.right.q_target_deg = joints(2.0);
+    target.left.has_joint_target = true;
+    target.right.has_joint_target = true;
+    buffer.setCommand(target);
+    sleepTicks();
+
+    const rb_servo::ServoSnapshot snapshot = loop.latestSnapshot();
+    loop.stop();
+    RB_CHECK(snapshot.tick > 0);
+    RB_CHECK(snapshot.loop_end_time_ns >= snapshot.loop_start_time_ns);
+    RB_CHECK(snapshot.motion_state == rb_servo::ServerMotionState::Running);
+    RB_CHECK(snapshot.left_send_ok);
+    RB_CHECK(snapshot.right_send_ok);
+    RB_CHECK(snapshot.left_send_start_ns > 0);
+    RB_CHECK(snapshot.left_send_end_ns >= snapshot.left_send_start_ns);
+    RB_CHECK(snapshot.right_send_start_ns > 0);
+    RB_CHECK(snapshot.right_send_end_ns >= snapshot.right_send_start_ns);
+    RB_CHECK(snapshot.left_send_duration_us >= 0.0);
+    RB_CHECK(snapshot.right_send_duration_us >= 0.0);
+    RB_CHECK(sameJointArray(snapshot.left_prev_sent_q_deg, joints(2.0)));
+    RB_CHECK(sameJointArray(snapshot.right_prev_sent_q_deg, joints(2.0)));
+    return true;
+}
+
+bool testLoggerZeroCapacityDropsWithoutBlocking() {
+    rb_servo::LoggingConfig cfg;
+    cfg.enable = true;
+    cfg.directory = "/tmp/rb-servo-logger-test-" + std::to_string(getpid());
+    cfg.queue_capacity = 0;
+    cfg.flush_period_ms = 1;
+
+    rb_servo::ServoLogger logger(cfg);
+    RB_CHECK(logger.start());
+    rb_servo::ServoSample sample;
+    logger.push(sample);
+    logger.stop();
+    std::filesystem::remove_all(cfg.directory);
+    RB_CHECK(logger.droppedSamples() == 1);
     return true;
 }
 
@@ -552,11 +765,18 @@ bool testStopBothOnSendFailureLatchesFault() {
 int main() {
     if (!testCommandValidation()) return 1;
     if (!testCommandBufferInvalidTimeoutHolds()) return 1;
+    if (!testCoupledTimeoutUsesEarliestArmTimeout()) return 1;
     if (!testLifecycleCommandSurvivesMotionOverwrite()) return 1;
+    if (!testOversizedUdpPacketDoesNotUpdateCommandBuffer()) return 1;
     if (!testCommandServerStartFailsOnInvalidBind()) return 1;
     if (!testCommandServerStartFailsOnPortConflict()) return 1;
     if (!testSecondCommandServerStartFailsOnSamePort()) return 1;
     if (!testRealModeTcpStatePublisherExposureRequiresOverride()) return 1;
+    if (!testSafetyFilterVelocityClampMaxStep()) return 1;
+    if (!testSafetyFilterAccelerationClampDoesNotOvershoot()) return 1;
+    if (!testRobotStateErrorRealPolicyLatchesFault()) return 1;
+    if (!testLatestSnapshotContainsSendTimingAndPreviousTargets()) return 1;
+    if (!testLoggerZeroCapacityDropsWithoutBlocking()) return 1;
     if (!testInvalidStartupRobotStateFailsStart()) return 1;
     if (!testEmergencyWinsAndResetDoesNotRun()) return 1;
     if (!testDisarmAndCartesianHoldPreviousTarget()) return 1;

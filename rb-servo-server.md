@@ -38,7 +38,7 @@ Python policy / teleop
         ↓
 CommandServer
         ↓
-CommandBuffer, latest-command-wins
+CommandBuffer, lifecycle queue + latest-motion-wins
         ↓
 DualArmServoLoop, 100–200 Hz
         ↓
@@ -83,6 +83,8 @@ Already implemented:
 - real-mode startup guards for `RB_ALLOW_REAL_ROBOT`, realtime setup, local command bind, and conservative safety policy
 - capped filter dt and acceleration-overshoot guard
 - force-control types/config/interface scaffold
+- thread-safe `ServoSnapshot` read surface for tests/debug/publisher integration
+- send timestamp/skew/duration logging for left/right servo commands
 
 Still pending:
 
@@ -152,6 +154,7 @@ Expected:
 - `left_q_sent_0` and `right_q_sent_0` move in opposite directions
 - `period_ms` is around 5 ms for 200 Hz
 - `jitter_ms` is nonzero and meaningful
+- send timing columns are present for later skew analysis
 - after command timeout, mode falls back to `Hold`
 - after `ResetFault`, motion requires a fresh `ArmMotion`
 

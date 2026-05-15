@@ -115,6 +115,11 @@ ServoTarget DualArmServoLoop::previousSentTarget() const {
     return target;
 }
 
+ServoSnapshot DualArmServoLoop::latestSnapshot() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return latest_snapshot_;
+}
+
 bool DualArmServoLoop::initializeRobots() {
     if (!left_robot_->connect() || !right_robot_->connect()) {
         std::cerr << "[ERROR] failed to connect robots\n";
@@ -233,8 +238,20 @@ void DualArmServoLoop::loopMain() {
 
         bool left_ok = false;
         bool right_ok = false;
+        uint64_t left_send_start_ns = 0;
+        uint64_t left_send_end_ns = 0;
+        uint64_t right_send_start_ns = 0;
+        uint64_t right_send_end_ns = 0;
         const ServoTarget attempted_target = safe_target;
-        sendTargets(attempted_target, &left_ok, &right_ok);
+        sendTargets(
+            attempted_target,
+            &left_ok,
+            &right_ok,
+            &left_send_start_ns,
+            &left_send_end_ns,
+            &right_send_start_ns,
+            &right_send_end_ns
+        );
         if (!left_ok || !right_ok) {
             safety_verdict = SafetyVerdict::SendFailure;
             if (isRealMode() || config_.safety.stop_both_arms_on_single_arm_error) {
@@ -245,6 +262,18 @@ void DualArmServoLoop::loopMain() {
         }
 
         const uint64_t loop_end = nowSteadyNs();
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (left_ok) {
+                left_prevprev_sent_q_deg_ = left_prev_sent_q_deg_;
+                left_prev_sent_q_deg_ = attempted_target.left_q_target_deg;
+            }
+            if (right_ok) {
+                right_prevprev_sent_q_deg_ = right_prev_sent_q_deg_;
+                right_prev_sent_q_deg_ = attempted_target.right_q_target_deg;
+            }
+        }
 
         ServoSample sample;
         sample.tick = tick_++;
@@ -257,6 +286,22 @@ void DualArmServoLoop::loopMain() {
         sample.right_sent_q_deg = attempted_target.right_q_target_deg;
         sample.left_send_ok = left_ok;
         sample.right_send_ok = right_ok;
+        sample.left_send_start_ns = left_send_start_ns;
+        sample.left_send_end_ns = left_send_end_ns;
+        sample.right_send_start_ns = right_send_start_ns;
+        sample.right_send_end_ns = right_send_end_ns;
+        if (left_send_start_ns > 0 && right_send_start_ns > 0) {
+            const uint64_t skew_ns = left_send_start_ns > right_send_start_ns
+                ? left_send_start_ns - right_send_start_ns
+                : right_send_start_ns - left_send_start_ns;
+            sample.send_skew_us = static_cast<double>(skew_ns) / 1000.0;
+        }
+        if (left_send_end_ns >= left_send_start_ns && left_send_start_ns > 0) {
+            sample.left_send_duration_us = static_cast<double>(left_send_end_ns - left_send_start_ns) / 1000.0;
+        }
+        if (right_send_end_ns >= right_send_start_ns && right_send_start_ns > 0) {
+            sample.right_send_duration_us = static_cast<double>(right_send_end_ns - right_send_start_ns) / 1000.0;
+        }
         sample.period_ms = nsToMs(actual_period_ns);
         sample.filter_dt_ms = filter_dt_sec * 1000.0;
         sample.jitter_ms = nsToMs(actual_period_ns > nominal_period_ns
@@ -266,23 +311,34 @@ void DualArmServoLoop::loopMain() {
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             sample.fault_latched = fault_latched_.load();
+            sample.motion_state = motion_state_.load();
             sample.fault_reason = fault_reason_;
+
+            latest_snapshot_.tick = sample.tick;
+            latest_snapshot_.loop_start_time_ns = loop_start;
+            latest_snapshot_.loop_end_time_ns = loop_end;
+            latest_snapshot_.left_state = left_state;
+            latest_snapshot_.right_state = right_state;
+            latest_snapshot_.left_prev_sent_q_deg = left_prev_sent_q_deg_;
+            latest_snapshot_.right_prev_sent_q_deg = right_prev_sent_q_deg_;
+            latest_snapshot_.safety_verdict = safety_verdict;
+            latest_snapshot_.motion_state = sample.motion_state;
+            latest_snapshot_.fault_latched = sample.fault_latched;
+            latest_snapshot_.latched_fault_reason = latched_fault_reason_.load();
+            latest_snapshot_.fault_reason = fault_reason_;
+            latest_snapshot_.left_send_ok = left_ok;
+            latest_snapshot_.right_send_ok = right_ok;
+            latest_snapshot_.left_send_start_ns = left_send_start_ns;
+            latest_snapshot_.left_send_end_ns = left_send_end_ns;
+            latest_snapshot_.right_send_start_ns = right_send_start_ns;
+            latest_snapshot_.right_send_end_ns = right_send_end_ns;
+            latest_snapshot_.send_skew_us = sample.send_skew_us;
+            latest_snapshot_.left_send_duration_us = sample.left_send_duration_us;
+            latest_snapshot_.right_send_duration_us = sample.right_send_duration_us;
         }
-        sample.motion_state = motion_state_.load();
 
         if (logger_) {
             logger_->push(sample);
-        }
-
-        if (left_ok) {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            left_prevprev_sent_q_deg_ = left_prev_sent_q_deg_;
-            left_prev_sent_q_deg_ = attempted_target.left_q_target_deg;
-        }
-        if (right_ok) {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            right_prevprev_sent_q_deg_ = right_prev_sent_q_deg_;
-            right_prev_sent_q_deg_ = attempted_target.right_q_target_deg;
         }
 
         std::this_thread::sleep_until(next_tick);
@@ -428,10 +484,21 @@ ServoTarget DualArmServoLoop::applySafety(
 void DualArmServoLoop::sendTargets(
     const ServoTarget& target,
     bool* left_ok,
-    bool* right_ok
+    bool* right_ok,
+    uint64_t* left_send_start_ns,
+    uint64_t* left_send_end_ns,
+    uint64_t* right_send_start_ns,
+    uint64_t* right_send_end_ns
 ) {
-    if (left_ok) *left_ok = left_robot_->sendServoJ(target.left_q_target_deg);
-    if (right_ok) *right_ok = right_robot_->sendServoJ(target.right_q_target_deg);
+    if (left_send_start_ns) *left_send_start_ns = nowSteadyNs();
+    const bool left_result = left_robot_->sendServoJ(target.left_q_target_deg);
+    if (left_send_end_ns) *left_send_end_ns = nowSteadyNs();
+    if (left_ok) *left_ok = left_result;
+
+    if (right_send_start_ns) *right_send_start_ns = nowSteadyNs();
+    const bool right_result = right_robot_->sendServoJ(target.right_q_target_deg);
+    if (right_send_end_ns) *right_send_end_ns = nowSteadyNs();
+    if (right_ok) *right_ok = right_result;
 }
 
 DualArmCommand DualArmServoLoop::makeHoldCommand(

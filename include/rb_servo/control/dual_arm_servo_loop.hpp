@@ -35,6 +35,7 @@ public:
     bool faultLatched() const;
     SafetyVerdict latchedFaultReason() const;
     ServoTarget previousSentTarget() const;
+    ServoSnapshot latestSnapshot() const;
 
 private:
     void loopMain();
@@ -64,7 +65,11 @@ private:
     void sendTargets(
         const ServoTarget& target,
         bool* left_ok,
-        bool* right_ok
+        bool* right_ok,
+        uint64_t* left_send_start_ns,
+        uint64_t* left_send_end_ns,
+        uint64_t* right_send_start_ns,
+        uint64_t* right_send_end_ns
     );
 
     DualArmCommand makeHoldCommand(
@@ -127,6 +132,7 @@ private:
     std::string fault_reason_;
     JointArray left_fault_hold_q_deg_{};
     JointArray right_fault_hold_q_deg_{};
+    ServoSnapshot latest_snapshot_;
 };
 
 }  // namespace rb_servo

@@ -49,6 +49,10 @@ void ServoLogger::push(const ServoSample& sample) {
     if (!config_.enable || !running_) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (config_.queue_capacity == 0) {
+            dropped_samples_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
         if (queue_.size() >= config_.queue_capacity) {
             queue_.pop_front();
             dropped_samples_.fetch_add(1, std::memory_order_relaxed);
@@ -81,6 +85,7 @@ void ServoLogger::threadMain() {
 
 void ServoLogger::writeHeader() {
     file_ << "tick,loop_start_time_ns,loop_end_time_ns,period_ms,jitter_ms,filter_dt_ms,safety_verdict,motion_state,fault_latched,fault_reason,logger_dropped_samples,command_seq,left_mode,right_mode,left_send_ok,right_send_ok";
+    file_ << ",left_send_start_ns,left_send_end_ns,right_send_start_ns,right_send_end_ns,send_skew_us,left_send_duration_us,right_send_duration_us";
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",right_q_actual_" << i;
     for (int i = 0; i < kDof; ++i) file_ << ",left_q_sent_" << i;
@@ -125,7 +130,14 @@ void ServoLogger::writeSample(const ServoSample& sample) {
           << toString(sample.command.left.mode) << ','
           << toString(sample.command.right.mode) << ','
           << sample.left_send_ok << ','
-          << sample.right_send_ok;
+          << sample.right_send_ok << ','
+          << sample.left_send_start_ns << ','
+          << sample.left_send_end_ns << ','
+          << sample.right_send_start_ns << ','
+          << sample.right_send_end_ns << ','
+          << sample.send_skew_us << ','
+          << sample.left_send_duration_us << ','
+          << sample.right_send_duration_us;
     for (double v : sample.left_state.q_actual_deg) file_ << ',' << v;
     for (double v : sample.right_state.q_actual_deg) file_ << ',' << v;
     for (double v : sample.left_sent_q_deg) file_ << ',' << v;
